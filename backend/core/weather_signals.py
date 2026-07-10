@@ -61,14 +61,14 @@ async def generate_weather_signal(market: WeatherMarket) -> Optional[WeatherTrad
     # Calculate model probability based on market's question
     if market.metric == "high":
         if market.direction == "above":
-            model_yes_prob = forecast.probability_high_above(market.threshold_f)
+            model_yes_prob = forecast.probability_high_above(market.threshold_c)
         else:
-            model_yes_prob = forecast.probability_high_below(market.threshold_f)
+            model_yes_prob = forecast.probability_high_below(market.threshold_c)
     else:  # "low"
         if market.direction == "above":
-            model_yes_prob = forecast.probability_low_above(market.threshold_f)
+            model_yes_prob = forecast.probability_low_above(market.threshold_c)
         else:
-            model_yes_prob = forecast.probability_low_below(market.threshold_f)
+            model_yes_prob = forecast.probability_low_below(market.threshold_c)
 
     # Clip extreme probabilities (ensemble can be unanimous but don't bet 100%)
     model_yes_prob = max(0.05, min(0.95, model_yes_prob))
@@ -90,7 +90,7 @@ async def generate_weather_signal(market: WeatherMarket) -> Optional[WeatherTrad
     else:
         members = forecast.member_lows
 
-    above_count = sum(1 for m in members if m > market.threshold_f)
+    above_count = sum(1 for m in members if m > market.threshold_c)
     agreement_frac = max(above_count, len(members) - above_count) / len(members)
     confidence = min(0.9, agreement_frac)
 
@@ -118,8 +118,8 @@ async def generate_weather_signal(market: WeatherMarket) -> Optional[WeatherTrad
 
     reasoning = (
         f"[{filter_status}]{filter_note} "
-        f"{market.city_name} {market.metric} {market.direction} {market.threshold_f:.0f}F on {market.target_date} | "
-        f"Ensemble: {mean_val:.1f}F +/- {std_val:.1f}F ({forecast.num_members} members) | "
+        f"{market.city_name} {market.metric} {market.direction} {market.threshold_c:.0f}C on {market.target_date} | "
+        f"Ensemble: {mean_val:.1f}C +/- {std_val:.1f}C ({forecast.num_members} members) | "
         f"Model YES: {model_yes_prob:.0%} vs Market: {market_yes_prob:.0%} | "
         f"Edge: {edge:+.1%} -> {direction.upper()} @ {entry_price:.0%} | "
         f"Agreement: {agreement_frac:.0%}"
@@ -193,7 +193,7 @@ async def scan_for_weather_signals() -> List[WeatherTradingSignal]:
 
     for signal in actionable[:5]:
         logger.info(f"  {signal.market.city_name}: {signal.market.metric} {signal.market.direction} "
-                     f"{signal.market.threshold_f:.0f}F | Edge: {signal.edge:+.1%}")
+                     f"{signal.market.threshold_c:.0f}C | Edge: {signal.edge:+.1%}")
 
     # Persist signals to DB
     _persist_weather_signals(signals)

@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     # Kalshi API
     KALSHI_API_KEY_ID: Optional[str] = None
     KALSHI_PRIVATE_KEY_PATH: Optional[str] = None
-    KALSHI_ENABLED: bool = True
+    KALSHI_ENABLED: bool = False  # No Chinese city weather markets on Kalshi
 
     # AI API Keys
     GROQ_API_KEY: Optional[str] = None
@@ -37,16 +37,17 @@ class Settings(BaseSettings):
     SCAN_INTERVAL_SECONDS: int = 60  # Scan every minute
     SETTLEMENT_INTERVAL_SECONDS: int = 120  # Check settlements every 2 min
     BTC_PRICE_SOURCE: str = "coinbase"
-    MIN_EDGE_THRESHOLD: float = 0.02  # 2% edge required — these are 50/50 markets
+    MIN_EDGE_THRESHOLD: float = 0.05  # 2% edge required — narrower prob range [0.40-0.60] produces smaller edges
     MAX_ENTRY_PRICE: float = 0.55  # Enter up to 55c
     MAX_TRADES_PER_WINDOW: int = 1
     MAX_TOTAL_PENDING_TRADES: int = 20
+    GRID_LEVELS: int = 8  # Number of Fibonacci grid orders per trade
 
     # Risk management
-    DAILY_LOSS_LIMIT: float = 300.0
-    MAX_TRADE_SIZE: float = 75.0
-    MIN_TIME_REMAINING: int = 60  # Don't trade windows closing in < 60s
-    MAX_TIME_REMAINING: int = 1800  # Trade windows up to 30min out
+    DAILY_LOSS_LIMIT: float = 50.0
+    MAX_TRADE_SIZE: float = 100.0
+    MIN_TIME_REMAINING: int = 120  # Don't trade windows closing in < 120s
+    MAX_TIME_REMAINING: int = 600  # Trade current + next 5-min window
 
     # Indicator weights for composite signal (must sum to ~1.0)
     WEIGHT_RSI: float = 0.20
@@ -65,7 +66,7 @@ class Settings(BaseSettings):
     WEATHER_MIN_EDGE_THRESHOLD: float = 0.08  # 8% — weather has more signal than 5-min BTC
     WEATHER_MAX_ENTRY_PRICE: float = 0.70
     WEATHER_MAX_TRADE_SIZE: float = 100.0
-    WEATHER_CITIES: str = "nyc,chicago,miami,los_angeles,denver"
+    WEATHER_CITIES: str = "wuhan,hongkong,shanghai,guangzhou,shenzhen"
 
     class Config:
         env_file = ".env"

@@ -109,7 +109,7 @@ export interface WeatherSignal {
   city_key: string
   city_name: string
   target_date: string
-  threshold_f: number
+  threshold_c: number
   metric: string
   direction: string
   model_probability: number

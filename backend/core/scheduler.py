@@ -8,8 +8,9 @@ from sqlalchemy import func
 import logging
 
 from backend.config import settings
-from backend.models.database import SessionLocal, Trade, BotState, Signal
+from backend.models.database import SessionLocal, Trade, BotState, Signal, GridOrder
 from backend.core.signals import scan_for_signals
+from backend.core.grid import generate_fibonacci_grid, check_grid_fills, update_trade_from_grid
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("trading_bot")
@@ -52,14 +53,75 @@ def get_recent_events(limit: int = 50) -> List[dict]:
     return event_log[-limit:]
 
 
+async def check_grid_fills_job():
+    """
+    Check pending grid orders against current market prices.
+    Fill any orders where the market price has dropped to or below the limit price.
+    Update parent Trade's entry_price and size based on filled orders.
+    """
+    db = SessionLocal()
+    try:
+        # Find all pending grid orders
+        pending = db.query(GridOrder).filter(GridOrder.status == "pending").all()
+        if not pending:
+            return
+
+        # Group by trade_id to fetch market price once per trade
+        trade_ids = set(o.trade_id for o in pending)
+        trades = db.query(Trade).filter(Trade.id.in_(trade_ids)).all()
+        trade_map = {t.id: t for t in trades}
+
+        # Fetch current market prices for each trade's market
+        from backend.data.btc_markets import fetch_active_btc_markets
+        markets = await fetch_active_btc_markets()
+        market_map = {m.slug: m for m in markets}
+
+        total_filled = 0
+        for trade in trades:
+            market = market_map.get(trade.event_slug)
+            if not market:
+                continue
+
+            # Get current price for the trade's direction
+            current_price = market.up_price if trade.direction == "up" else market.down_price
+
+            # Get this trade's grid orders
+            trade_grid = [o for o in pending if o.trade_id == trade.id]
+            newly_filled = check_grid_fills(trade_grid, current_price)
+
+            if newly_filled:
+                all_grid = db.query(GridOrder).filter(GridOrder.trade_id == trade.id).all()
+                update_trade_from_grid(trade, all_grid)
+                total_filled += len(newly_filled)
+
+                log_event("data",
+                    f"Grid fill: {trade.event_slug} {trade.direction.upper()} "
+                    f"{len(newly_filled)} orders filled @ {current_price:.0%} | "
+                    f"avg entry {trade.entry_price:.3f}, {trade.grid_filled_shares:.0f} shares, ${trade.grid_filled_cost:.2f}"
+                )
+
+        if total_filled > 0:
+            db.commit()
+            log_event("info", f"Grid fills: {total_filled} orders filled across {len(trade_ids)} trades")
+
+    except Exception as e:
+        logger.warning(f"Grid fill check error: {e}")
+    finally:
+        db.close()
+
+
 async def scan_and_trade_job():
     """
     Background job: Scan BTC 5-min markets, generate signals, execute trades.
     Runs every minute.
+    Also checks pending grid orders for fills on each scan.
     """
     log_event("info", "Scanning BTC 5-min markets...")
 
     try:
+        # --- Check pending grid orders for fills ---
+        await check_grid_fills_job()
+
         signals = await scan_for_signals()
         actionable = [s for s in signals if s.passes_threshold]
 
@@ -128,20 +190,50 @@ async def scan_and_trade_job():
                 # Map up/down to yes/no for storage
                 entry_price = signal.market.up_price if signal.direction == "up" else signal.market.down_price
 
+                # --- Fibonacci grid execution ---
+                # Instead of one market order, generate a grid of limit orders
+                # at Fibonacci-spaced prices from current price down to 0.25
+                grid_levels = generate_fibonacci_grid(
+                    current_price=entry_price,
+                    budget=trade_size,
+                )
+
                 trade = Trade(
                     market_ticker=signal.market.market_id,
                     platform="polymarket",
                     event_slug=signal.market.slug,
                     direction=signal.direction,
-                    entry_price=entry_price,
+                    entry_price=entry_price,  # Initial = market price, updated as grid fills
                     size=trade_size,
                     model_probability=signal.model_probability,
                     market_price_at_entry=signal.market_probability,
-                    edge_at_entry=signal.edge
+                    edge_at_entry=signal.edge,
+                    grid_total_budget=trade_size,
+                    grid_filled_cost=0.0,
+                    grid_filled_shares=0.0,
                 )
 
                 db.add(trade)
-                db.flush()  # get trade.id
+                db.flush()
+
+                # Create grid orders
+                for gl in grid_levels:
+                    go = GridOrder(
+                        trade_id=trade.id,
+                        level=gl.level,
+                        limit_price=gl.limit_price,
+                        shares=gl.shares,
+                        cost=gl.cost,
+                        status="pending",
+                    )
+                    db.add(go)
+
+                # Immediately fill orders at or above current market price
+                db.flush()
+                grid_orders = db.query(GridOrder).filter(GridOrder.trade_id == trade.id).all()
+                newly_filled = check_grid_fills(grid_orders, entry_price)
+                if newly_filled:
+                    update_trade_from_grid(trade, grid_orders)
 
                 # Link trade to the most recent matching Signal and mark it executed
                 matching_signal = db.query(Signal).filter(
@@ -156,7 +248,8 @@ async def scan_and_trade_job():
                 trades_executed += 1
 
                 log_event("trade",
-                    f"BTC {signal.direction.upper()} ${trade_size:.0f} @ {entry_price:.0%} | {signal.market.slug}",
+                    f"BTC {signal.direction.upper()} grid ${trade_size:.0f} | "
+                    f"{len(grid_levels)} levels @ {entry_price:.0%}→{grid_levels[-1].limit_price:.0%} | {signal.market.slug}",
                     {
                         "slug": signal.market.slug,
                         "direction": signal.direction,
@@ -164,6 +257,8 @@ async def scan_and_trade_job():
                         "edge": signal.edge,
                         "entry_price": entry_price,
                         "btc_price": signal.btc_price,
+                        "grid_levels": len(grid_levels),
+                        "grid_avg_price": sum(l.cost for l in grid_levels) / sum(l.shares for l in grid_levels) if grid_levels else 0,
                     }
                 )
 
@@ -285,7 +380,7 @@ async def weather_scan_and_trade_job():
                 log_event("trade",
                     f"WX {signal.market.city_name}: {signal.direction.upper()} "
                     f"${trade_size:.0f} @ {entry_price:.0%} | "
-                    f"{signal.market.metric} {signal.market.direction} {signal.market.threshold_f:.0f}F",
+                    f"{signal.market.metric} {signal.market.direction} {signal.market.threshold_c:.0f}C",
                     {
                         "slug": signal.market.slug,
                         "direction": signal.direction,

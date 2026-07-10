@@ -1,9 +1,8 @@
-import { formatDistanceToNow } from 'date-fns'
 import { ArrowUpDown, ArrowUp, ArrowDown } from 'lucide-react'
 import { useState, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import type { Trade } from '../types'
-import { platformStyles } from '../utils'
+import { platformStyles, formatDistanceToNowBeijing } from '../utils'
 
 interface Props {
   trades: Trade[]
@@ -162,7 +161,7 @@ export function TradesTable({ trades }: Props) {
                   )}
                 </td>
                 <td className="py-1 px-1.5 text-right text-[10px] text-neutral-600 tabular-nums">
-                  {formatDistanceToNow(new Date(trade.timestamp), { addSuffix: false })}
+                  {formatDistanceToNowBeijing(trade.timestamp)}
                 </td>
               </motion.tr>
             )

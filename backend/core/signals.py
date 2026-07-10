@@ -151,34 +151,29 @@ async def generate_btc_signal(market: BtcMarket) -> Optional[TradingSignal]:
 
     # --- Individual indicator signals (each returns a bias from -1 to +1) ---
 
-    # 1) RSI: mean reversion — oversold (< 30) = UP, overbought (> 70) = DOWN
-    if micro.rsi < 30:
-        rsi_signal = 0.5 + (30 - micro.rsi) / 30  # 0.5 to 1.0
-    elif micro.rsi > 70:
-        rsi_signal = -0.5 - (micro.rsi - 70) / 30  # -0.5 to -1.0
-    elif micro.rsi < 45:
-        rsi_signal = (45 - micro.rsi) / 30  # slight UP lean
-    elif micro.rsi > 55:
-        rsi_signal = -(micro.rsi - 55) / 30  # slight DOWN lean
-    else:
-        rsi_signal = 0.0
-    rsi_signal = max(-1.0, min(1.0, rsi_signal))
+    # 1) RSI: momentum-following — high RSI = bullish, low RSI = bearish
+    #    In 5-min BTC markets, strong trends keep RSI elevated for multiple candles.
+    #    Mean-reversion gets crushed by short squeezes. Follow the trend instead.
+    #    Linear mapping: S_rsi = (RSI - 50) / 25, clamped to [-1, +1]
+    rsi_signal = max(-1.0, min(1.0, (micro.rsi - 50.0) / 25.0))
 
     # 2) Momentum: weighted blend of 1m, 5m, 15m changes
-    #    Positive momentum = UP bias
+    #    Positive momentum = UP bias (unchanged — already momentum-following)
     mom_blend = micro.momentum_1m * 0.5 + micro.momentum_5m * 0.35 + micro.momentum_15m * 0.15
     # Normalise: ±0.1% is a strong 5-min signal for BTC
     momentum_signal = max(-1.0, min(1.0, mom_blend / 0.10))
 
-    # 3) VWAP deviation: price above VWAP = UP momentum, below = DOWN
+    # 3) VWAP deviation: price above VWAP = UP momentum, below = DOWN (unchanged)
     vwap_signal = max(-1.0, min(1.0, micro.vwap_deviation / 0.05))
 
-    # 4) SMA crossover: sma5 > sma15 = bullish
+    # 4) SMA crossover: sma5 > sma15 = bullish (unchanged)
     sma_signal = max(-1.0, min(1.0, micro.sma_crossover / 0.03))
 
-    # 5) Market skew: contrarian — if market says UP strongly, fade it
+    # 5) Market skew: REMOVED contrarian logic
+    #    Data showed the market is usually right for BTC 5-min — don't fade it.
+    #    Instead, slightly follow the market: if market says UP, lean UP.
     market_skew = market_up_prob - 0.50
-    skew_signal = max(-1.0, min(1.0, -market_skew * 4))
+    skew_signal = max(-1.0, min(1.0, market_skew * 2))
 
     # --- Convergence filter: count how many indicators agree on direction ---
     indicator_signs = [
@@ -190,7 +185,7 @@ async def generate_btc_signal(market: BtcMarket) -> Optional[TradingSignal]:
     up_votes = sum(1 for s in indicator_signs if s > 0.05)
     down_votes = sum(1 for s in indicator_signs if s < -0.05)
 
-    # Convergence: require 2/4 indicators to agree — these are noisy 50/50 markets
+    # Convergence: require 2/4 indicators to agree (3/4 was too strict — killed all signals)
     has_convergence = up_votes >= 2 or down_votes >= 2
 
     # --- Weighted composite ---
@@ -203,10 +198,11 @@ async def generate_btc_signal(market: BtcMarket) -> Optional[TradingSignal]:
         + skew_signal * w.WEIGHT_MARKET_SKEW
     )
 
-    # Convert composite (-1..+1) to probability (0.35..0.65)
-    # Wider range lets us express real edge when indicators converge
-    model_up_prob = 0.50 + composite * 0.15
-    model_up_prob = max(0.35, min(0.65, model_up_prob))
+    # Convert composite (-1..+1) to probability (0.40..0.60)
+    # Narrower range: data showed high-edge signals were anti-predictive.
+    # Keeping probabilities closer to 0.50 avoids overconfident Kelly sizing.
+    model_up_prob = 0.50 + composite * 0.10
+    model_up_prob = max(0.40, min(0.60, model_up_prob))
 
     # Calculate edge and direction
     edge, direction = calculate_edge(model_up_prob, market_up_prob)
@@ -217,6 +213,15 @@ async def generate_btc_signal(market: BtcMarket) -> Optional[TradingSignal]:
     else:
         entry_price = market.down_price
 
+    # --- Extreme market price filter ---
+    # When market price is < 0.25 or > 0.75, the market is heavily one-sided.
+    # Our model is clamped to [0.40, 0.60], so any "edge" against a market
+    # beyond 25/75 is mostly a floor/ceiling artifact, not a real prediction.
+    # Example: model DOWN = 51%, market DOWN = 25% → edge = 26% (fake!)
+    #   The model barely disagrees (51% vs 49%), but the 26% gap is just
+    #   the clamp floor (40%) minus the market price (25%).
+    market_extreme = market_up_prob < 0.25 or market_up_prob > 0.75
+
     # Time-remaining filter: only trade windows in the sweet spot
     now = datetime.utcnow()
     # Handle timezone-aware window_end
@@ -226,7 +231,12 @@ async def generate_btc_signal(market: BtcMarket) -> Optional[TradingSignal]:
     time_remaining = (window_end - now).total_seconds()
     time_ok = settings.MIN_TIME_REMAINING <= time_remaining <= settings.MAX_TIME_REMAINING
 
-    passes_filters = has_convergence and entry_price <= settings.MAX_ENTRY_PRICE and time_ok
+    passes_filters = (
+        has_convergence
+        and entry_price <= settings.MAX_ENTRY_PRICE
+        and time_ok
+        and not market_extreme
+    )
 
     # Zero out edge if filters fail (signal still returned for UI visibility)
     if not passes_filters:

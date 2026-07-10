@@ -22,9 +22,11 @@ function LiveClock() {
     const interval = setInterval(() => setTime(new Date()), 1000)
     return () => clearInterval(interval)
   }, [])
+  // Display Beijing time (UTC+8) regardless of viewer's local timezone
+  const beijingTime = new Date(time.getTime() + 8 * 60 * 60 * 1000)
   return (
     <span className="text-xs tabular-nums text-neutral-400">
-      {time.toLocaleTimeString('en-US', { hour12: false })}
+      {beijingTime.toISOString().slice(11, 19)}
     </span>
   )
 }
@@ -76,7 +78,7 @@ function App() {
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['dashboard'],
     queryFn: fetchDashboard,
-    refetchInterval: 10000,
+    refetchInterval: 5000,
   })
 
   const scanMutation = useMutation({
@@ -370,7 +372,7 @@ function App() {
           Binance/Coinbase | Open-Meteo | Polymarket + Kalshi
         </span>
         <div className="flex items-center gap-3">
-          <RefreshBar interval={10000} />
+          <RefreshBar interval={5000} />
           <span className="text-[10px] text-neutral-700 font-mono">BTC 5-min + Weather Temp</span>
           <div className="flex items-center gap-1">
             <div className="w-1.5 h-1.5 rounded-full bg-green-500" />

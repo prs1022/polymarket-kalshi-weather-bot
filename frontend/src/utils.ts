@@ -2,6 +2,75 @@
  * Utility functions for the BTC 5-min trading bot dashboard
  */
 
+/**
+ * Convert UTC timestamp string to Beijing time (UTC+8) Date object.
+ * Backend stores all timestamps in UTC (naive datetime without timezone suffix).
+ * This function ensures correct conversion regardless of the viewer's local timezone.
+ */
+function toBeijingDate(utcTimestamp: string): Date {
+  // If the timestamp already has timezone info (Z or +00:00), parse directly
+  // Otherwise treat it as UTC by appending 'Z'
+  let ts = utcTimestamp
+  if (!ts.endsWith('Z') && !ts.includes('+') && !ts.includes('-', 10)) {
+    ts = ts + 'Z'
+  }
+  const date = new Date(ts)
+  // Convert to Beijing time (UTC+8) by creating a new Date from the shifted time
+  const beijingMs = date.getTime() + 8 * 60 * 60 * 1000
+  return new Date(beijingMs)
+}
+
+/** Format UTC timestamp as Beijing time string (HH:MM:SS) */
+export function formatBeijingTime(utcTimestamp: string): string {
+  try {
+    return toBeijingDate(utcTimestamp).toISOString().slice(11, 19)
+  } catch {
+    return '--:--:--'
+  }
+}
+
+/** Format UTC timestamp as Beijing date-time string (MM/DD HH:MM) */
+export function formatBeijingDateTime(utcTimestamp: string): string {
+  try {
+    const d = toBeijingDate(utcTimestamp)
+    const mm = String(d.getUTCMonth() + 1).padStart(2, '0')
+    const dd = String(d.getUTCDate()).padStart(2, '0')
+    const hh = String(d.getUTCHours()).padStart(2, '0')
+    const mi = String(d.getUTCMinutes()).padStart(2, '0')
+    return `${mm}/${dd} ${hh}:${mi}`
+  } catch {
+    return '--/-- --:--'
+  }
+}
+
+/** Format UTC timestamp as Beijing date string (Mon D) */
+export function formatBeijingDate(utcTimestamp: string): string {
+  try {
+    const d = toBeijingDate(utcTimestamp)
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+    return `${months[d.getUTCMonth()]} ${d.getUTCDate()}`
+  } catch {
+    return '--'
+  }
+}
+
+/** Format distance from now in Beijing time (e.g. "3m", "1h", "2s") */
+export function formatDistanceToNowBeijing(utcTimestamp: string): string {
+  try {
+    let ts = utcTimestamp
+    if (!ts.endsWith('Z') && !ts.includes('+') && !ts.includes('-', 10)) {
+      ts = ts + 'Z'
+    }
+    const diff = Math.floor((Date.now() - new Date(ts).getTime()) / 1000)
+    if (diff < 60) return `${diff}s`
+    if (diff < 3600) return `${Math.floor(diff / 60)}m`
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h`
+    return `${Math.floor(diff / 86400)}d`
+  } catch {
+    return '--'
+  }
+}
+
 export function getMarketUrl(platform: string, ticker: string, eventSlug?: string): string {
   const platformLower = platform.toLowerCase()
 

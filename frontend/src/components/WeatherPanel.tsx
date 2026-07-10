@@ -53,7 +53,7 @@ export function WeatherPanel({ forecasts, signals }: Props) {
             </div>
             <div className="flex-1 flex items-center gap-3 text-[10px] tabular-nums">
               <span className="text-neutral-300">
-                {f.mean_high.toFixed(0)}F
+                {f.mean_high.toFixed(0)}C
                 <span className="text-neutral-600 ml-0.5">+/-{f.std_high.toFixed(0)}</span>
               </span>
               <AgreementBar value={f.ensemble_agreement} />

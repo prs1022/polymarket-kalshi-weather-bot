@@ -11,7 +11,7 @@ import os
 from backend.config import settings
 from backend.models.database import (
     get_db, init_db, SessionLocal,
-    Signal, Trade, BotState, AILog, ScanLog
+    Signal, Trade, BotState, AILog, ScanLog, GridOrder
 )
 from backend.core.signals import scan_for_signals, TradingSignal
 from backend.data.btc_markets import fetch_active_btc_markets, BtcMarket
@@ -114,6 +114,18 @@ class SignalResponse(BaseModel):
     actionable: bool = False
 
 
+class GridOrderResponse(BaseModel):
+    id: int
+    trade_id: int
+    level: int
+    limit_price: float
+    shares: float
+    cost: float
+    status: str
+    filled_at: Optional[datetime] = None
+    fill_price: Optional[float] = None
+
+
 class TradeResponse(BaseModel):
     id: int
     market_ticker: str
@@ -126,6 +138,10 @@ class TradeResponse(BaseModel):
     settled: bool
     result: str
     pnl: Optional[float]
+    grid_total_budget: float = 0.0
+    grid_filled_cost: float = 0.0
+    grid_filled_shares: float = 0.0
+    grid_orders: List[GridOrderResponse] = []
 
 
 class BotStats(BaseModel):
@@ -174,7 +190,7 @@ class WeatherMarketResponse(BaseModel):
     city_key: str
     city_name: str
     target_date: str
-    threshold_f: float
+    threshold_c: float
     metric: str
     direction: str
     yes_price: float
@@ -187,7 +203,7 @@ class WeatherSignalResponse(BaseModel):
     city_key: str
     city_name: str
     target_date: str
-    threshold_f: float
+    threshold_c: float
     metric: str
     direction: str
     model_probability: float
@@ -425,7 +441,18 @@ async def get_trades(
             timestamp=t.timestamp,
             settled=t.settled,
             result=t.result,
-            pnl=t.pnl
+            pnl=t.pnl,
+            grid_total_budget=t.grid_total_budget or 0.0,
+            grid_filled_cost=t.grid_filled_cost or 0.0,
+            grid_filled_shares=t.grid_filled_shares or 0.0,
+            grid_orders=[
+                GridOrderResponse(
+                    id=g.id, trade_id=g.trade_id, level=g.level,
+                    limit_price=g.limit_price, shares=g.shares, cost=g.cost,
+                    status=g.status, filled_at=g.filled_at, fill_price=g.fill_price,
+                )
+                for g in (t.grid_orders if hasattr(t, 'grid_orders') else db.query(GridOrder).filter(GridOrder.trade_id == t.id).all())
+            ],
         )
         for t in trades
     ]
@@ -721,7 +748,7 @@ async def get_weather_markets():
                 city_key=m.city_key,
                 city_name=m.city_name,
                 target_date=m.target_date.isoformat(),
-                threshold_f=m.threshold_f,
+                threshold_c=m.threshold_c,
                 metric=m.metric,
                 direction=m.direction,
                 yes_price=m.yes_price,
@@ -755,7 +782,7 @@ def _weather_signal_to_response(s) -> WeatherSignalResponse:
         city_key=s.market.city_key,
         city_name=s.market.city_name,
         target_date=s.market.target_date.isoformat(),
-        threshold_f=s.market.threshold_f,
+        threshold_c=s.market.threshold_c,
         metric=s.market.metric,
         direction=s.direction,
         model_probability=s.model_probability,
@@ -850,11 +877,124 @@ async def reset_bot(db: Session = Depends(get_db)):
 @app.get("/api/dashboard", response_model=DashboardData)
 async def get_dashboard(db: Session = Depends(get_db)):
     """Get all dashboard data in one call."""
+    import asyncio
+
     stats = await get_stats(db)
 
-    # Fetch BTC price from microstructure first, fallback to CoinGecko
-    btc_price_data = None
+    # Fetch microstructure, markets, and signals in parallel
+    micro_task = asyncio.create_task(_safe_compute_microstructure())
+    markets_task = asyncio.create_task(fetch_active_btc_markets())
+    signals_task = asyncio.create_task(scan_for_signals())
+
+    # DB queries can run while network calls are in flight
+    trades = db.query(Trade).order_by(Trade.timestamp.desc()).limit(50).all()
+    equity_trades = db.query(Trade).filter(Trade.settled == True).order_by(Trade.timestamp).all()
+    calibration = _compute_calibration_summary(db)
+
+    # Await parallel results
+    micro_data, btc_price_data, micro = await micro_task
+    markets = await markets_task
+    raw_signals = await signals_task
+
+    # Build windows from fetched markets
+    windows = [
+        BtcWindowResponse(
+            slug=m.slug,
+            market_id=m.market_id,
+            up_price=m.up_price,
+            down_price=m.down_price,
+            window_start=m.window_start,
+            window_end=m.window_end,
+            volume=m.volume,
+            is_active=m.is_active,
+            is_upcoming=m.is_upcoming,
+            time_until_end=m.time_until_end,
+            spread=m.spread,
+        )
+        for m in markets
+    ]
+
+    signals = [_signal_to_response(s, actionable=s.passes_threshold) for s in raw_signals]
+
+    recent_trades = [
+        TradeResponse(
+            id=t.id,
+            market_ticker=t.market_ticker,
+            platform=t.platform,
+            event_slug=t.event_slug,
+            direction=t.direction,
+            entry_price=t.entry_price,
+            size=t.size,
+            timestamp=t.timestamp,
+            settled=t.settled,
+            result=t.result,
+            pnl=t.pnl
+        )
+        for t in trades
+    ]
+
+    # Equity curve
+    equity_curve = []
+    cumulative_pnl = 0
+    for trade in equity_trades:
+        if trade.pnl is not None:
+            cumulative_pnl += trade.pnl
+            equity_curve.append({
+                "timestamp": trade.timestamp.isoformat(),
+                "pnl": cumulative_pnl,
+                "bankroll": settings.INITIAL_BANKROLL + cumulative_pnl
+            })
+
+    # Weather data (if enabled)
+    weather_signals_data = []
+    weather_forecasts_data = []
+    if settings.WEATHER_ENABLED:
+        try:
+            from backend.core.weather_signals import scan_for_weather_signals
+            from backend.data.weather import fetch_ensemble_forecast, CITY_CONFIG
+
+            wx_signals = await scan_for_weather_signals()
+            weather_signals_data = [_weather_signal_to_response(s) for s in wx_signals]
+
+            city_keys = [c.strip() for c in settings.WEATHER_CITIES.split(",") if c.strip()]
+            forecast_tasks = [fetch_ensemble_forecast(k) for k in city_keys if k in CITY_CONFIG]
+            forecast_results = await asyncio.gather(*forecast_tasks, return_exceptions=True)
+            for forecast in forecast_results:
+                if isinstance(forecast, Exception) or not forecast:
+                    continue
+                weather_forecasts_data.append(WeatherForecastResponse(
+                    city_key=forecast.city_key,
+                    city_name=forecast.city_name,
+                    target_date=forecast.target_date.isoformat(),
+                    mean_high=forecast.mean_high,
+                    std_high=forecast.std_high,
+                    mean_low=forecast.mean_low,
+                    std_low=forecast.std_low,
+                    num_members=forecast.num_members,
+                    ensemble_agreement=forecast.ensemble_agreement,
+                ))
+        except Exception:
+            pass
+
+    return DashboardData(
+        stats=stats,
+        btc_price=btc_price_data,
+        microstructure=micro_data,
+        windows=windows,
+        active_signals=signals,
+        recent_trades=recent_trades,
+        equity_curve=equity_curve,
+        calibration=calibration,
+        weather_signals=weather_signals_data,
+        weather_forecasts=weather_forecasts_data,
+    )
+
+
+async def _safe_compute_microstructure():
+    """Helper: compute microstructure and return (micro_data, btc_price_data, micro)."""
     micro_data = None
+    btc_price_data = None
+    micro = None
     try:
         micro = await compute_btc_microstructure()
         if micro:
@@ -871,7 +1011,7 @@ async def get_dashboard(db: Session = Depends(get_db)):
             )
             btc_price_data = BtcPriceResponse(
                 price=micro.price,
-                change_24h=micro.momentum_15m * 96,  # rough extrapolation
+                change_24h=micro.momentum_15m * 96,
                 change_7d=0,
                 market_cap=0,
                 volume_24h=0,
@@ -893,116 +1033,7 @@ async def get_dashboard(db: Session = Depends(get_db)):
                 )
         except Exception:
             pass
-
-    # Fetch windows
-    windows = []
-    try:
-        markets = await fetch_active_btc_markets()
-        windows = [
-            BtcWindowResponse(
-                slug=m.slug,
-                market_id=m.market_id,
-                up_price=m.up_price,
-                down_price=m.down_price,
-                window_start=m.window_start,
-                window_end=m.window_end,
-                volume=m.volume,
-                is_active=m.is_active,
-                is_upcoming=m.is_upcoming,
-                time_until_end=m.time_until_end,
-                spread=m.spread,
-            )
-            for m in markets
-        ]
-    except Exception:
-        pass
-
-    # Signals — return ALL signals, mark which are actionable
-    signals = []
-    try:
-        raw_signals = await scan_for_signals()
-        signals = [_signal_to_response(s, actionable=s.passes_threshold) for s in raw_signals]
-    except Exception:
-        pass
-
-    # Recent trades
-    trades = db.query(Trade).order_by(Trade.timestamp.desc()).limit(50).all()
-    recent_trades = [
-        TradeResponse(
-            id=t.id,
-            market_ticker=t.market_ticker,
-            platform=t.platform,
-            event_slug=t.event_slug,
-            direction=t.direction,
-            entry_price=t.entry_price,
-            size=t.size,
-            timestamp=t.timestamp,
-            settled=t.settled,
-            result=t.result,
-            pnl=t.pnl
-        )
-        for t in trades
-    ]
-
-    # Equity curve
-    equity_trades = db.query(Trade).filter(Trade.settled == True).order_by(Trade.timestamp).all()
-    equity_curve = []
-    cumulative_pnl = 0
-    for trade in equity_trades:
-        if trade.pnl is not None:
-            cumulative_pnl += trade.pnl
-            equity_curve.append({
-                "timestamp": trade.timestamp.isoformat(),
-                "pnl": cumulative_pnl,
-                "bankroll": settings.INITIAL_BANKROLL + cumulative_pnl
-            })
-
-    # Calibration summary
-    calibration = _compute_calibration_summary(db)
-
-    # Weather data (if enabled)
-    weather_signals_data = []
-    weather_forecasts_data = []
-    if settings.WEATHER_ENABLED:
-        try:
-            from backend.core.weather_signals import scan_for_weather_signals
-            from backend.data.weather import fetch_ensemble_forecast, CITY_CONFIG
-
-            wx_signals = await scan_for_weather_signals()
-            weather_signals_data = [_weather_signal_to_response(s) for s in wx_signals]
-
-            city_keys = [c.strip() for c in settings.WEATHER_CITIES.split(",") if c.strip()]
-            for city_key in city_keys:
-                if city_key not in CITY_CONFIG:
-                    continue
-                forecast = await fetch_ensemble_forecast(city_key)
-                if forecast:
-                    weather_forecasts_data.append(WeatherForecastResponse(
-                        city_key=forecast.city_key,
-                        city_name=forecast.city_name,
-                        target_date=forecast.target_date.isoformat(),
-                        mean_high=forecast.mean_high,
-                        std_high=forecast.std_high,
-                        mean_low=forecast.mean_low,
-                        std_low=forecast.std_low,
-                        num_members=forecast.num_members,
-                        ensemble_agreement=forecast.ensemble_agreement,
-                    ))
-        except Exception:
-            pass
-
-    return DashboardData(
-        stats=stats,
-        btc_price=btc_price_data,
-        microstructure=micro_data,
-        windows=windows,
-        active_signals=signals,
-        recent_trades=recent_trades,
-        equity_curve=equity_curve,
-        calibration=calibration,
-        weather_signals=weather_signals_data,
-        weather_forecasts=weather_forecasts_data,
-    )
+    return micro_data, btc_price_data, micro
 
 
 @app.websocket("/ws/events")

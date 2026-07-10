@@ -8,6 +8,7 @@ import {
   ResponsiveContainer,
   ReferenceLine
 } from 'recharts'
+import { formatBeijingDate } from '../utils'
 import { motion } from 'framer-motion'
 import type { EquityPoint } from '../types'
 
@@ -45,7 +46,7 @@ export function EquityChart({ data, initialBankroll }: Props) {
     { timestamp: 'Start', pnl: 0, bankroll: initialBankroll },
     ...data.map(d => ({
       ...d,
-      timestamp: new Date(d.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      timestamp: formatBeijingDate(d.timestamp)
     }))
   ]
 

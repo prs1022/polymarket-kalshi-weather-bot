@@ -30,9 +30,14 @@ class Trade(Base):
 
     # Trade details
     direction = Column(String)  # "up" or "down"
-    entry_price = Column(Float)
-    size = Column(Float)
+    entry_price = Column(Float)   # Weighted avg of filled grid orders (updated live)
+    size = Column(Float)           # Total dollar amount across filled orders
     timestamp = Column(DateTime, default=datetime.utcnow)
+
+    # Grid settings
+    grid_total_budget = Column(Float, default=0.0)    # Total budget allocated
+    grid_filled_cost = Column(Float, default=0.0)      # Total cost of filled orders
+    grid_filled_shares = Column(Float, default=0.0)    # Total shares filled
 
     # Settlement
     settled = Column(Boolean, default=False)
@@ -45,6 +50,22 @@ class Trade(Base):
     model_probability = Column(Float)
     market_price_at_entry = Column(Float)
     edge_at_entry = Column(Float)
+
+
+class GridOrder(Base):
+    """Individual limit orders within a Fibonacci grid."""
+    __tablename__ = "grid_orders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    trade_id = Column(Integer, index=True)  # FK to Trade.id
+    level = Column(Integer)           # 0, 1, 2, ...
+    limit_price = Column(Float)         # Limit price for this order
+    shares = Column(Float)             # Number of shares to buy
+    cost = Column(Float)                # shares * limit_price
+
+    status = Column(String, default="pending")  # pending, filled, expired
+    filled_at = Column(DateTime, nullable=True)
+    fill_price = Column(Float, nullable=True)  # Actual fill price (may differ from limit)
 
 
 class BtcPriceSnapshot(Base):
@@ -173,6 +194,20 @@ def ensure_schema():
         with engine.connect() as conn:
             with conn.begin():
                 conn.execute(text("ALTER TABLE trades ADD COLUMN market_type VARCHAR DEFAULT 'btc'"))
+
+    # Add grid columns to trades table
+    for col, coltype in [
+        ("grid_total_budget", "FLOAT DEFAULT 0.0"),
+        ("grid_filled_cost", "FLOAT DEFAULT 0.0"),
+        ("grid_filled_shares", "FLOAT DEFAULT 0.0"),
+    ]:
+        if col not in columns:
+            try:
+                with engine.connect() as conn:
+                    with conn.begin():
+                        conn.execute(text(f"ALTER TABLE trades ADD COLUMN {col} {coltype}"))
+            except Exception:
+                pass
 
     # Add calibration columns to signals table
     try:

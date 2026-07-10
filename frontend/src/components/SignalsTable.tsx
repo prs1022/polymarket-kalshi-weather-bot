@@ -82,7 +82,7 @@ export function SignalsTable({ signals, weatherSignals, onSimulateTrade, isSimul
     const wx: UnifiedSignal[] = weatherSignals.map(s => ({
       key: `wx-${s.market_id}`,
       ticker: s.market_id,
-      title: `${s.city_name} ${s.metric} ${s.direction} ${s.threshold_f}F`,
+      title: `${s.city_name} ${s.metric} ${s.direction} ${s.threshold_c}C`,
       platform: s.platform || 'kalshi',
       category: 'WX',
       direction: s.direction,

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { Play, Pause, RefreshCw } from 'lucide-react'
+import { formatBeijingTime } from '../utils'
 
 interface LogEntry {
   timestamp: string
@@ -125,7 +126,7 @@ export function Terminal({ isRunning, lastRun, onStart, onStop, onScan }: Props)
 
   const formatTime = (timestamp: string) => {
     try {
-      return new Date(timestamp).toLocaleTimeString('en-US', { hour12: false })
+      return formatBeijingTime(timestamp)
     } catch {
       return '--:--:--'
     }

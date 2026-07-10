@@ -10,20 +10,21 @@ from backend.data.weather_markets import WeatherMarket
 logger = logging.getLogger("trading_bot")
 
 # Kalshi series tickers for high-temperature markets by city
+# NOTE: Kalshi may not have series for Chinese cities — these are placeholders
 CITY_SERIES: Dict[str, str] = {
-    "nyc": "KXHIGHNY",
-    "chicago": "KXHIGHCHI",
-    "miami": "KXHIGHMIA",
-    "los_angeles": "KXHIGHLAX",
-    "denver": "KXHIGHDEN",
+    "wuhan": "KXHIGHWHN",
+    "hongkong": "KXHIGHHKG",
+    "shanghai": "KXHIGHSHA",
+    "guangzhou": "KXHIGHGZH",
+    "shenzhen": "KXHIGHSZN",
 }
 
 CITY_NAMES: Dict[str, str] = {
-    "nyc": "New York",
-    "chicago": "Chicago",
-    "miami": "Miami",
-    "los_angeles": "Los Angeles",
-    "denver": "Denver",
+    "wuhan": "武汉",
+    "hongkong": "香港",
+    "shanghai": "上海",
+    "guangzhou": "广州",
+    "shenzhen": "深圳",
 }
 
 # Month abbreviation mapping for ticker parsing
@@ -37,10 +38,10 @@ def _parse_kalshi_ticker(ticker: str, city_key: str) -> Optional[dict]:
     """
     Parse a Kalshi bracket ticker into market parameters.
 
-    Format: KXHIGHNY-26MAR01-B45.5
+    Format: KXHIGHWHN-26MAR01-B35.5
       - 26MAR01 = 2026-03-01
-      - B45.5 = bracket boundary at 45.5°F (above)
-      - T45.5 would be "at or below" (top boundary)
+      - B35.5 = bracket boundary at 35.5C (above)
+      - T35.5 would be "at or below" (top boundary)
     """
     # Match: SERIES-YYMONDD-B/Tnn.n
     match = re.match(
@@ -71,7 +72,7 @@ def _parse_kalshi_ticker(ticker: str, city_key: str) -> Optional[dict]:
 
     return {
         "target_date": target_date,
-        "threshold_f": threshold,
+        "threshold_c": threshold,
         "metric": "high",
         "direction": direction,
     }
@@ -148,7 +149,7 @@ async def fetch_kalshi_weather_markets(
                         city_key=city_key,
                         city_name=city_name,
                         target_date=parsed["target_date"],
-                        threshold_f=parsed["threshold_f"],
+                        threshold_c=parsed["threshold_c"],
                         metric=parsed["metric"],
                         direction=parsed["direction"],
                         yes_price=yes_price,

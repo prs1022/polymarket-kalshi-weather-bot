@@ -1,4 +1,5 @@
 """BTC 5-minute market fetcher for Polymarket."""
+import asyncio
 import httpx
 import json
 import logging
@@ -15,6 +16,13 @@ SERIES_SLUG = "btc-up-or-down-5m"
 
 # Strict regex: only match real BTC 5-min window slugs (e.g. btc-updown-5m-1708531200)
 _BTC_SLUG_RE = re.compile(r"^btc-updown-5m-\d{10}$")
+
+# Short-lived cache (5s) for active markets to deduplicate calls within
+# a single dashboard request (fetch_active_btc_markets + scan_for_signals)
+# while still allowing fresh prices on each frontend poll (5s interval)
+_markets_cache: dict = {"data": None, "ts": 0.0}
+_markets_lock = asyncio.Lock()
+_MARKETS_CACHE_TTL = 5.0
 
 
 def is_valid_btc_slug(slug: str) -> bool:
@@ -71,34 +79,35 @@ def _compute_window_slugs(count: int = 5) -> List[str]:
     Compute event slugs for the current and upcoming 5-min windows.
 
     Slug pattern: btc-updown-5m-{unix_timestamp}
-    where timestamp is the END of the 5-min window.
+    where timestamp is the START of the 5-min window.
     """
     now = time.time()
     current_boundary = _round_to_5min(now)
 
-    # The current window ends at the next boundary
-    next_boundary = current_boundary + 300
-
     slugs = []
     for i in range(count):
-        end_ts = next_boundary + (i * 300)
-        slugs.append(f"btc-updown-5m-{end_ts}")
+        start_ts = current_boundary + (i * 300)
+        slugs.append(f"btc-updown-5m-{start_ts}")
 
     return slugs
 
 
 def _parse_event_to_btc_market(event: dict) -> Optional[BtcMarket]:
-    """Parse a Polymarket event into a BtcMarket."""
+    """Parse a Polymarket event into a BtcMarket.
+
+    Price priority: outcomePrices (most accurate Gamma field) > lastTradePrice > bestBid/bestAsk > 50/50
+    """
     markets = event.get("markets", [])
     if not markets:
         return None
 
     market = markets[0]
 
-    # Parse outcome prices
-    outcome_prices = market.get("outcomePrices", "")
+    # Parse prices — outcomePrices is the most accurate field from Gamma API
     up_price = 0.5
     down_price = 0.5
+
+    outcome_prices = market.get("outcomePrices", "")
     if outcome_prices:
         try:
             prices = json.loads(outcome_prices) if isinstance(outcome_prices, str) else outcome_prices
@@ -107,6 +116,13 @@ def _parse_event_to_btc_market(event: dict) -> Optional[BtcMarket]:
                 down_price = float(prices[1])
         except (json.JSONDecodeError, ValueError, TypeError):
             pass
+
+    # Fallback to lastTradePrice if outcomePrices not available or looks stale (both near 0.5)
+    if abs(up_price - 0.5) < 0.01:
+        last_trade = market.get("lastTradePrice")
+        if last_trade is not None and abs(float(last_trade) - 0.5) > 0.01:
+            up_price = float(last_trade)
+            down_price = 1.0 - up_price
 
     # Parse timestamps
     slug = event.get("slug", "")
@@ -159,63 +175,125 @@ async def fetch_btc_market_by_slug(slug: str) -> Optional[BtcMarket]:
                 return None
 
             event = events[0] if isinstance(events, list) else events
-            return _parse_event_to_btc_market(event)
+            market = _parse_event_to_btc_market(event)
+            if market:
+                # Enrich with real-time CLOB prices (most accurate)
+                await _enrich_with_clob_prices(event, market)
+            return market
 
         except Exception as e:
             logger.debug(f"Failed to fetch BTC market {slug}: {e}")
             return None
 
 
+async def _enrich_with_clob_prices(event: dict, market: BtcMarket):
+    """Fetch real-time prices from Polymarket CLOB API and update the market."""
+    try:
+        markets_list = event.get("markets", [])
+        if not markets_list:
+            return
+        raw_market = markets_list[0]
+        token_ids_raw = raw_market.get("clobTokenIds")
+        if not token_ids_raw:
+            return
+
+        token_ids = json.loads(token_ids_raw) if isinstance(token_ids_raw, str) else token_ids_raw
+        if not isinstance(token_ids, list) or len(token_ids) < 2:
+            return
+
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            up_resp = await client.get(
+                "https://clob.polymarket.com/price",
+                params={"token_id": token_ids[0], "side": "buy"}
+            )
+            down_resp = await client.get(
+                "https://clob.polymarket.com/price",
+                params={"token_id": token_ids[1], "side": "buy"}
+            )
+
+            if up_resp.status_code == 200 and down_resp.status_code == 200:
+                up_price = float(up_resp.json().get("price", 0))
+                down_price = float(down_resp.json().get("price", 0))
+                # Sanity check: prices should sum to roughly 1.0
+                if up_price > 0 and down_price > 0 and 0.8 < (up_price + down_price) < 1.2:
+                    market.up_price = up_price
+                    market.down_price = down_price
+                elif up_price > 0.5:
+                    # CLOB sometimes returns extreme values near settlement
+                    market.up_price = up_price
+                    market.down_price = 1.0 - up_price
+    except Exception as e:
+        logger.debug(f"CLOB price enrichment failed: {e}")
+
+
 async def fetch_active_btc_markets() -> List[BtcMarket]:
     """
     Fetch current and upcoming BTC 5-min markets from Polymarket.
 
-    Strategy: compute expected slugs from current time and fetch them,
-    plus do a series search as fallback.
+    Uses a 5-second cache with a lock to deduplicate concurrent calls
+    (dashboard calls this + scan_for_signals which also calls it).
     """
-    markets: List[BtcMarket] = []
-    seen_slugs = set()
+    # Fast path: check cache without lock
+    now = time.time()
+    if _markets_cache["data"] is not None and (now - _markets_cache["ts"]) < _MARKETS_CACHE_TTL:
+        return _markets_cache["data"]
 
-    # Method 1: Compute expected slugs and fetch directly
-    expected_slugs = _compute_window_slugs(count=6)
-    for slug in expected_slugs:
-        market = await fetch_btc_market_by_slug(slug)
-        if market and market.slug not in seen_slugs:
-            seen_slugs.add(market.slug)
-            markets.append(market)
+    # Acquire lock to prevent duplicate API calls from concurrent coroutines
+    async with _markets_lock:
+        # Re-check cache after acquiring lock (another caller may have populated it)
+        now = time.time()
+        if _markets_cache["data"] is not None and (now - _markets_cache["ts"]) < _MARKETS_CACHE_TTL:
+            return _markets_cache["data"]
 
-    # Method 2: Search by series as fallback/supplement
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.get(
-                f"{GAMMA_API}/events",
-                params={
-                    "active": "true",
-                    "closed": "false",
-                    "slug_contains": "btc-updown-5m",
-                    "limit": 20,
-                }
-            )
-            response.raise_for_status()
-            events = response.json()
+        markets: List[BtcMarket] = []
+        seen_slugs = set()
 
-            for event in events:
-                market = _parse_event_to_btc_market(event)
-                if market and market.slug not in seen_slugs and is_valid_btc_slug(market.slug):
-                    seen_slugs.add(market.slug)
-                    markets.append(market)
+        # Method 1: Compute expected slugs and fetch in parallel
+        expected_slugs = _compute_window_slugs(count=2)  # current + next window only
+        tasks = [fetch_btc_market_by_slug(slug) for slug in expected_slugs]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, BtcMarket) and result.slug not in seen_slugs:
+                seen_slugs.add(result.slug)
+                markets.append(result)
 
-    except Exception as e:
-        logger.debug(f"BTC series search fallback failed: {e}")
+        # Method 2: Search by series as fallback/supplement
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.get(
+                    f"{GAMMA_API}/events",
+                    params={
+                        "active": "true",
+                        "closed": "false",
+                        "slug_contains": "btc-updown-5m",
+                        "limit": 20,
+                    }
+                )
+                response.raise_for_status()
+                events = response.json()
 
-    # Sort by window end time (soonest first)
-    markets.sort(key=lambda m: m.window_end)
+                for event in events:
+                    market = _parse_event_to_btc_market(event)
+                    if market and market.slug not in seen_slugs and is_valid_btc_slug(market.slug):
+                        seen_slugs.add(market.slug)
+                        markets.append(market)
 
-    # Filter out already-closed markets
-    markets = [m for m in markets if not m.closed]
+        except Exception as e:
+            logger.debug(f"BTC series search fallback failed: {e}")
 
-    logger.info(f"Fetched {len(markets)} active BTC 5-min markets")
-    return markets
+        # Sort by window end time (soonest first)
+        markets.sort(key=lambda m: m.window_end)
+
+        # Filter out already-closed markets
+        markets = [m for m in markets if not m.closed]
+
+        logger.info(f"Fetched {len(markets)} active BTC 5-min markets")
+
+        # Update cache
+        _markets_cache["data"] = markets
+        _markets_cache["ts"] = now
+
+        return markets
 
 
 async def fetch_btc_market_for_settlement(slug: str) -> Optional[BtcMarket]:

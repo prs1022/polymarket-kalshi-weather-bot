@@ -18,11 +18,11 @@ interface CityMarker {
 }
 
 const CITIES: Record<string, { lat: number; lng: number; name: string }> = {
-  nyc: { lat: 40.7128, lng: -74.006, name: 'NYC' },
-  chicago: { lat: 41.8781, lng: -87.6298, name: 'CHI' },
-  miami: { lat: 25.7617, lng: -80.1918, name: 'MIA' },
-  los_angeles: { lat: 34.0522, lng: -118.2437, name: 'LA' },
-  denver: { lat: 39.7392, lng: -104.9903, name: 'DEN' },
+  wuhan: { lat: 30.5928, lng: 114.3055, name: '武汉' },
+  hongkong: { lat: 22.3193, lng: 114.1694, name: '香港' },
+  shanghai: { lat: 31.2304, lng: 121.4737, name: '上海' },
+  guangzhou: { lat: 23.1291, lng: 113.2644, name: '广州' },
+  shenzhen: { lat: 22.5431, lng: 114.0579, name: '深圳' },
 }
 
 export function GlobeView({ forecasts, signals }: Props) {
@@ -53,7 +53,7 @@ export function GlobeView({ forecasts, signals }: Props) {
 
   useEffect(() => {
     if (globeRef.current) {
-      globeRef.current.pointOfView({ lat: 39.5, lng: -98.35, altitude: 2.2 }, 1000)
+      globeRef.current.pointOfView({ lat: 30, lng: 115, altitude: 2.2 }, 1000)
       globeRef.current.controls().autoRotate = true
       globeRef.current.controls().autoRotateSpeed = 0.3
       globeRef.current.controls().enableZoom = false
@@ -96,7 +96,7 @@ export function GlobeView({ forecasts, signals }: Props) {
       const tempSpan = document.createElement('div')
       tempSpan.className = 'marker-temp'
       tempSpan.style.color = '#e5e5e5'
-      tempSpan.textContent = `${marker.forecast.mean_high.toFixed(0)}F`
+      tempSpan.textContent = `${marker.forecast.mean_high.toFixed(0)}C`
       label.appendChild(tempSpan)
     }
 

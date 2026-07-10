@@ -10,14 +10,13 @@ logger = logging.getLogger("trading_bot")
 
 # Map city names/variants found in market titles to our city keys
 CITY_ALIASES = {
-    "new york": "nyc",
-    "nyc": "nyc",
-    "new york city": "nyc",
-    "chicago": "chicago",
-    "miami": "miami",
-    "los angeles": "los_angeles",
-    "la": "los_angeles",
-    "denver": "denver",
+    "wuhan": "wuhan",
+    "hong kong": "hongkong",
+    "hongkong": "hongkong",
+    "shanghai": "shanghai",
+    "guangzhou": "guangzhou",
+    "canton": "guangzhou",
+    "shenzhen": "shenzhen",
 }
 
 # Month name to number
@@ -40,7 +39,7 @@ class WeatherMarket:
     city_key: str
     city_name: str
     target_date: date
-    threshold_f: float       # Temperature threshold in Fahrenheit
+    threshold_c: float       # Temperature threshold in Celsius
     metric: str              # "high" or "low"
     direction: str           # "above" or "below"
     yes_price: float         # Price of YES outcome (0-1)
@@ -54,16 +53,16 @@ def _parse_weather_market_title(title: str) -> Optional[dict]:
     Parse a weather market title to extract city, threshold, metric, date.
 
     Handles patterns like:
-    - "Will the high temperature in New York exceed 75°F on March 5?"
-    - "NYC high temperature above 80°F on March 10, 2026"
-    - "Chicago daily high over 60°F on March 3"
-    - "Will Miami's low be above 65°F on March 7?"
-    - "Temperature in Denver above 70°F on March 5, 2026"
+    - "Will the high temperature in Wuhan exceed 35C on March 5?"
+    - "Shanghai high temperature above 30C on March 10, 2026"
+    - "Hong Kong daily high over 25C on March 3"
+    - "Will Guangzhou's low be above 15C on March 7?"
+    - "Temperature in Shenzhen above 28C on March 5, 2026"
     """
     title_lower = title.lower()
 
     # Must be temperature-related
-    if not any(kw in title_lower for kw in ["temperature", "temp", "°f", "degrees", "high", "low"]):
+    if not any(kw in title_lower for kw in ["temperature", "temp", "°c", "celsius", "degrees", "high", "low"]):
         return None
 
     # Extract city
@@ -79,13 +78,13 @@ def _parse_weather_market_title(title: str) -> Optional[dict]:
     if not city_key:
         return None
 
-    # Extract threshold temperature
-    temp_match = re.search(r'(\d+)\s*°?\s*f', title_lower)
+    # Extract threshold temperature (Celsius)
+    temp_match = re.search(r'(\d+)\s*°?\s*c', title_lower)
     if not temp_match:
         temp_match = re.search(r'(\d+)\s*degrees', title_lower)
     if not temp_match:
         return None
-    threshold_f = float(temp_match.group(1))
+    threshold_c = float(temp_match.group(1))
 
     # Determine metric (high vs low)
     metric = "high"  # default
@@ -105,7 +104,7 @@ def _parse_weather_market_title(title: str) -> Optional[dict]:
     return {
         "city_key": city_key,
         "city_name": city_name,
-        "threshold_f": threshold_f,
+        "threshold_c": threshold_c,
         "metric": metric,
         "direction": direction,
         "target_date": target_date,
@@ -266,7 +265,7 @@ def _parse_polymarket_weather(
         city_key=parsed["city_key"],
         city_name=parsed["city_name"],
         target_date=parsed["target_date"],
-        threshold_f=parsed["threshold_f"],
+        threshold_c=parsed["threshold_c"],
         metric=parsed["metric"],
         direction=parsed["direction"],
         yes_price=yes_price,
