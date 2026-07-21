@@ -1,4 +1,11 @@
-"""Fibonacci grid execution for reducing slippage and averaging down."""
+"""Grid execution for reducing slippage and averaging down.
+
+Supports two price-spacing modes:
+- "fibonacci": Fibonacci cumulative spacing (denser near current price)
+- "equal": Equal spacing across the price range
+
+Both modes use Fibonacci share multiplier (deeper levels buy more).
+"""
 import logging
 from dataclasses import dataclass
 from datetime import datetime
@@ -9,7 +16,11 @@ from backend.config import settings
 logger = logging.getLogger("trading_bot")
 
 MIN_SHARES = 5  # Polymarket has $1 minimum trade
-EXTREME_PRICE = 0.25  # Lower bound for grid (matches market_extreme filter)
+
+
+def _get_extreme_price() -> float:
+    """Get grid lower bound from config."""
+    return settings.GRID_LOWER_BOUND
 
 
 @dataclass
@@ -37,24 +48,24 @@ def generate_fibonacci_grid(
     current_price: float,
     budget: float,
     min_shares: int = MIN_SHARES,
-    extreme_price: float = EXTREME_PRICE,
+    extreme_price: float = None,
     num_levels: int = None,
 ) -> List[GridLevel]:
     """
-    Generate a Fibonacci-spaced grid of limit buy orders.
+    Generate a grid of limit buy orders.
 
-    Grid spans from current_price down to extreme_price.
-    Price intervals follow Fibonacci sequence.
-    Size multiplier: X = 1 + 0.1 * fib[i], so deeper levels buy more.
+    Grid spans from MIN_ENTRY_PRICE (fixed upper bound) down to extreme_price.
+    Price spacing depends on GRID_MODE:
+    - "fibonacci": Fibonacci cumulative spacing (denser near current price)
+    - "equal": Equal spacing across the range
 
-    Since there's no order book integration, all orders are considered filled
-    immediately at their limit price (simulated execution).
+    Share multiplier: X = 1 + 0.1 * fib[i], so deeper levels buy more.
 
     Args:
-        current_price: Current market price of the token (UP or DOWN)
+        current_price: Current market price of the token (UP or DOWN) — used for fallback only
         budget: Maximum total dollar amount to spend
         min_shares: Minimum shares per level (default 5, PM $1 minimum)
-        extreme_price: Lower bound of grid (default 0.25)
+        extreme_price: Lower bound of grid (default: GRID_LOWER_BOUND from config)
         num_levels: Number of grid levels (default: from config GRID_LEVELS)
 
     Returns:
@@ -62,46 +73,51 @@ def generate_fibonacci_grid(
     """
     if num_levels is None:
         num_levels = settings.GRID_LEVELS
+    if extreme_price is None:
+        extreme_price = settings.GRID_LOWER_BOUND
 
-    if current_price <= extreme_price:
-        shares = max(min_shares, int(budget / current_price))
-        return [GridLevel(0, current_price, shares, shares * current_price)]
+    # Fixed upper bound: MIN_ENTRY_PRICE (e.g. 0.48)
+    grid_upper = settings.MIN_ENTRY_PRICE
 
-    price_range = current_price - extreme_price
+    if grid_upper <= extreme_price:
+        shares = max(min_shares, int(budget / grid_upper))
+        return [GridLevel(0, grid_upper, shares, shares * grid_upper)]
+
+    price_range = grid_upper - extreme_price
     fib = _generate_fib_sequence(num_levels)
     fib_sum = sum(fib)
 
-    # Cumulative Fibonacci for price positioning
-    cumulative = []
-    running = 0
-    for f in fib:
-        running += f
-        cumulative.append(running)
-
     # Generate raw grid levels (unscaled)
     raw_levels = []
-    for i, cum in enumerate(cumulative):
-        price = current_price - (cum / fib_sum) * price_range
-        price = max(extreme_price, price)
+    for i in range(num_levels):
+        if settings.GRID_MODE == "equal":
+            # Equal spacing: each level is 1/N of the range apart
+            price = grid_upper - ((i + 1) / num_levels) * price_range
+        else:
+            # Fibonacci spacing: cumulative Fibonacci distribution
+            cumulative = sum(fib[:i + 1])
+            price = grid_upper - (cumulative / fib_sum) * price_range
+
+        price = round(max(extreme_price, price), 2)
         size_mult = 1.0 + 0.1 * fib[i]
         shares = min_shares * size_mult
-        raw_levels.append(GridLevel(i, price, shares, shares * price))
+        raw_levels.append(GridLevel(i, price, round(shares, 2), round(shares * price, 2)))
 
     # Scale to fit budget
     raw_total = sum(l.cost for l in raw_levels)
     if raw_total > budget:
         scale = budget / raw_total
         for l in raw_levels:
-            l.shares = max(min_shares, round(l.shares * scale))
-            l.cost = l.shares * l.limit_price
+            l.shares = round(max(min_shares, l.shares * scale), 2)
+            l.cost = round(l.shares * l.limit_price, 2)
 
-    # Round shares to integers
+    # Round to 2 decimal places
     for l in raw_levels:
-        l.shares = int(round(l.shares))
-        l.cost = l.shares * l.limit_price
+        l.shares = round(l.shares, 2)
+        l.cost = round(l.shares * l.limit_price, 2)
 
     logger.info(
-        f"Grid: {len(raw_levels)} levels, "
+        f"Grid [{settings.GRID_MODE}]: {len(raw_levels)} levels, "
         f"price {raw_levels[0].limit_price:.3f} → {raw_levels[-1].limit_price:.3f}, "
         f"shares {sum(l.shares for l in raw_levels)}, "
         f"cost ${sum(l.cost for l in raw_levels):.2f}, "
@@ -153,6 +169,7 @@ def update_trade_from_grid(trade, grid_orders):
     total_shares = sum(o.shares for o in filled)
 
     trade.entry_price = total_cost / total_shares if total_shares > 0 else 0
-    trade.size = total_cost
+    trade.size = total_cost        # Dollars spent
+    trade.shares = total_shares    # Shares bought
     trade.grid_filled_cost = total_cost
     trade.grid_filled_shares = total_shares

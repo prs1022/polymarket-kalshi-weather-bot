@@ -11,7 +11,7 @@ import os
 from backend.config import settings
 from backend.models.database import (
     get_db, init_db, SessionLocal,
-    Signal, Trade, BotState, AILog, ScanLog, GridOrder
+    Signal, Trade, BotState, AILog, ScanLog, GridOrder, get_bot_state
 )
 from backend.core.signals import scan_for_signals, TradingSignal
 from backend.data.btc_markets import fetch_active_btc_markets, BtcMarket
@@ -133,7 +133,8 @@ class TradeResponse(BaseModel):
     event_slug: Optional[str] = None
     direction: str
     entry_price: float
-    size: float
+    size: float           # Dollar amount spent
+    shares: float = 0.0   # Number of shares bought
     timestamp: datetime
     settled: bool
     result: str
@@ -142,6 +143,10 @@ class TradeResponse(BaseModel):
     grid_filled_cost: float = 0.0
     grid_filled_shares: float = 0.0
     grid_orders: List[GridOrderResponse] = []
+    stop_loss_price: Optional[float] = None
+    stop_loss_filled: bool = False
+    stop_loss_filled_at: Optional[datetime] = None
+    is_live: bool = False  # False=sim, True=live
 
 
 class BotStats(BaseModel):
@@ -152,6 +157,7 @@ class BotStats(BaseModel):
     total_pnl: float
     is_running: bool
     last_run: Optional[datetime]
+    is_live: bool = False  # False=sim, True=live
 
 
 class CalibrationBucket(BaseModel):
@@ -220,6 +226,8 @@ class WeatherSignalResponse(BaseModel):
 
 class DashboardData(BaseModel):
     stats: BotStats
+    live_stats: Optional[BotStats] = None
+    live_enabled: bool = False
     btc_price: Optional[BtcPriceResponse]
     microstructure: Optional[MicrostructureResponse] = None
     windows: List[BtcWindowResponse]
@@ -250,28 +258,36 @@ async def startup():
 
     db = SessionLocal()
     try:
-        state = db.query(BotState).first()
-        if not state:
-            state = BotState(
-                bankroll=settings.INITIAL_BANKROLL,
-                total_trades=0,
-                winning_trades=0,
-                total_pnl=0.0,
-                is_running=True
-            )
-            db.add(state)
-            db.commit()
-            print(f"Created new bot state with ${settings.INITIAL_BANKROLL:,.2f} bankroll")
+        # Ensure both sim and live states exist
+        sim_state = get_bot_state(db, is_live=False)
+        live_state = get_bot_state(db, is_live=True)
+
+        sim_state.is_running = True
+        if settings.LIVE_TRADING_ENABLED:
+            live_state.is_running = True
+            # Sync live bankroll with actual USDC balance on startup
+            try:
+                from backend.data.polymarket_executor import get_executor
+                executor = get_executor()
+                if not executor.is_stub:
+                    actual_balance = executor.get_usdc_balance()
+                    live_state.bankroll = round(actual_balance, 2)
+                    print(f"[LIVE] Bankroll synced to actual USDC: ${actual_balance:.2f}")
+            except Exception as e:
+                print(f"[LIVE] Failed to sync USDC balance: {e}")
+        db.commit()
+        print(f"[SIM] Bankroll ${sim_state.bankroll:,.2f}, P&L ${sim_state.total_pnl:+,.2f}, {sim_state.total_trades} trades")
+        if settings.LIVE_TRADING_ENABLED:
+            print(f"[LIVE] Bankroll ${live_state.bankroll:,.2f}, P&L ${live_state.total_pnl:+,.2f}, {live_state.total_trades} trades")
         else:
-            state.is_running = True
-            db.commit()
-            print(f"Loaded bot state: Bankroll ${state.bankroll:,.2f}, P&L ${state.total_pnl:+,.2f}, {state.total_trades} trades")
+            print("[LIVE] Live trading DISABLED")
     finally:
         db.close()
 
     print("")
     print("Configuration:")
     print(f"  - Simulation mode: {settings.SIMULATION_MODE}")
+    print(f"  - Live trading: {'ENABLED' if settings.LIVE_TRADING_ENABLED else 'DISABLED'}")
     print(f"  - Min edge threshold: {settings.MIN_EDGE_THRESHOLD:.0%}")
     print(f"  - Kelly fraction: {settings.KELLY_FRACTION:.0%}")
     print(f"  - Scan interval: {settings.SCAN_INTERVAL_SECONDS}s")
@@ -310,23 +326,38 @@ async def health():
     return {"status": "healthy"}
 
 
-@app.get("/api/stats", response_model=BotStats)
+@app.get("/api/stats")
 async def get_stats(db: Session = Depends(get_db)):
-    state = db.query(BotState).first()
-    if not state:
-        raise HTTPException(status_code=404, detail="Bot state not initialized")
+    """Get stats for both sim and live modes."""
+    sim_state = get_bot_state(db, is_live=False)
+    live_state = get_bot_state(db, is_live=True)
 
-    win_rate = state.winning_trades / state.total_trades if state.total_trades > 0 else 0
+    sim_win_rate = sim_state.winning_trades / sim_state.total_trades if sim_state.total_trades > 0 else 0
+    live_win_rate = live_state.winning_trades / live_state.total_trades if live_state.total_trades > 0 else 0
 
-    return BotStats(
-        bankroll=state.bankroll,
-        total_trades=state.total_trades,
-        winning_trades=state.winning_trades,
-        win_rate=win_rate,
-        total_pnl=state.total_pnl,
-        is_running=state.is_running,
-        last_run=state.last_run
-    )
+    return {
+        "sim": BotStats(
+            bankroll=sim_state.bankroll,
+            total_trades=sim_state.total_trades,
+            winning_trades=sim_state.winning_trades,
+            win_rate=sim_win_rate,
+            total_pnl=sim_state.total_pnl,
+            is_running=sim_state.is_running,
+            last_run=sim_state.last_run,
+            is_live=False,
+        ),
+        "live": BotStats(
+            bankroll=live_state.bankroll,
+            total_trades=live_state.total_trades,
+            winning_trades=live_state.winning_trades,
+            win_rate=live_win_rate,
+            total_pnl=live_state.total_pnl,
+            is_running=live_state.is_running,
+            last_run=live_state.last_run,
+            is_live=True,
+        ),
+        "live_enabled": settings.LIVE_TRADING_ENABLED,
+    }
 
 
 # BTC-specific endpoints
@@ -438,6 +469,7 @@ async def get_trades(
             direction=t.direction,
             entry_price=t.entry_price,
             size=t.size,
+            shares=getattr(t, 'shares', 0.0) or 0.0,
             timestamp=t.timestamp,
             settled=t.settled,
             result=t.result,
@@ -453,6 +485,10 @@ async def get_trades(
                 )
                 for g in (t.grid_orders if hasattr(t, 'grid_orders') else db.query(GridOrder).filter(GridOrder.trade_id == t.id).all())
             ],
+            stop_loss_price=getattr(t, 'stop_loss_price', None),
+            stop_loss_filled=getattr(t, 'stop_loss_filled', False),
+            stop_loss_filled_at=getattr(t, 'stop_loss_filled_at', None),
+            is_live=getattr(t, 'is_live', False),
         )
         for t in trades
     ]
@@ -479,6 +515,46 @@ async def get_equity_curve(db: Session = Depends(get_db)):
     return curve
 
 
+@app.get("/api/stop-loss-stats")
+async def get_stop_loss_stats(db: Session = Depends(get_db)):
+    """Stop-loss statistics: how many stop-losses triggered, direction correctness."""
+    settled = db.query(Trade).filter(Trade.settled == True).all()
+
+    total_settled = len(settled)
+    stop_loss_trades = [t for t in settled if getattr(t, 'stop_loss_filled', False)]
+    stop_loss_count = len(stop_loss_trades)
+
+    # Among stop-loss trades, check if direction was correct (would have won)
+    direction_correct = 0
+    direction_wrong = 0
+    for t in stop_loss_trades:
+        if t.settlement_value is not None:
+            mapped_dir = "up" if t.direction in ("up", "yes") else "down"
+            actual = "up" if t.settlement_value == 1.0 else "down"
+            if mapped_dir == actual:
+                direction_correct += 1  # Would have won, stop-loss was unnecessary
+            else:
+                direction_wrong += 1    # Would have lost, stop-loss saved us
+
+    # Trades where grid fully filled but stop-loss did NOT fill (held to settlement)
+    grid_filled_no_stop = [
+        t for t in settled
+        if getattr(t, 'stop_loss_price', None) is not None
+        and not getattr(t, 'stop_loss_filled', False)
+    ]
+    grid_filled_no_stop_count = len(grid_filled_no_stop)
+    grid_filled_no_stop_loss = sum(1 for t in grid_filled_no_stop if t.result == "loss")
+
+    return {
+        "total_settled": total_settled,
+        "stop_loss_count": stop_loss_count,
+        "stop_loss_direction_correct": direction_correct,
+        "stop_loss_direction_wrong": direction_wrong,
+        "grid_filled_no_stop_count": grid_filled_no_stop_count,
+        "grid_filled_no_stop_losses": grid_filled_no_stop_loss,
+    }
+
+
 @app.post("/api/simulate-trade")
 async def simulate_trade(signal_ticker: str, db: Session = Depends(get_db)):
     from backend.core.scheduler import log_event
@@ -489,9 +565,7 @@ async def simulate_trade(signal_ticker: str, db: Session = Depends(get_db)):
     if not signal:
         raise HTTPException(status_code=404, detail="Signal not found")
 
-    state = db.query(BotState).first()
-    if not state:
-        raise HTTPException(status_code=500, detail="Bot state not initialized")
+    state = get_bot_state(db, is_live=False)
 
     entry_price = signal.market.up_price if signal.direction == "up" else signal.market.down_price
 
@@ -519,7 +593,7 @@ async def simulate_trade(signal_ticker: str, db: Session = Depends(get_db)):
 async def run_scan(db: Session = Depends(get_db)):
     from backend.core.scheduler import run_manual_scan, log_event
 
-    state = db.query(BotState).first()
+    state = get_bot_state(db, is_live=False)
     if state:
         state.last_run = datetime.utcnow()
         db.commit()
@@ -818,10 +892,9 @@ async def get_events(limit: int = 50):
 async def start_bot(db: Session = Depends(get_db)):
     from backend.core.scheduler import start_scheduler, log_event, is_scheduler_running
 
-    state = db.query(BotState).first()
-    if state:
-        state.is_running = True
-        db.commit()
+    sim_state = get_bot_state(db, is_live=False)
+    sim_state.is_running = True
+    db.commit()
 
     if not is_scheduler_running():
         start_scheduler()
@@ -834,13 +907,83 @@ async def start_bot(db: Session = Depends(get_db)):
 async def stop_bot(db: Session = Depends(get_db)):
     from backend.core.scheduler import log_event
 
-    state = db.query(BotState).first()
-    if state:
-        state.is_running = False
-        db.commit()
+    sim_state = get_bot_state(db, is_live=False)
+    sim_state.is_running = False
+    db.commit()
 
     log_event("info", "Trading bot paused")
     return {"status": "stopped", "is_running": False}
+
+
+@app.post("/api/live/toggle")
+async def toggle_live_trading(db: Session = Depends(get_db)):
+    """Toggle live trading on/off."""
+    from backend.core.scheduler import log_event
+
+    settings.LIVE_TRADING_ENABLED = not settings.LIVE_TRADING_ENABLED
+    live_state = get_bot_state(db, is_live=True)
+    live_state.is_running = settings.LIVE_TRADING_ENABLED
+
+    # When enabling live trading, sync bankroll with actual USDC balance
+    if settings.LIVE_TRADING_ENABLED:
+        try:
+            from backend.data.polymarket_executor import get_executor
+            executor = get_executor()
+            if not executor.is_stub:
+                actual_balance = executor.get_usdc_balance()
+                live_state.bankroll = round(actual_balance, 2)
+                live_state.total_pnl = 0.0
+                live_state.total_trades = 0
+                live_state.winning_trades = 0
+                log_event("success",
+                    f"【实盘】Live trading ENABLED | USDC balance: ${actual_balance:.2f} | Bankroll synced")
+            else:
+                log_event("success", f"【实盘】Live trading ENABLED (stub mode)")
+        except Exception as e:
+            log_event("error", f"【实盘】Failed to sync USDC balance: {e}")
+    else:
+        log_event("info", f"【实盘】Live trading DISABLED")
+
+    db.commit()
+    return {"live_enabled": settings.LIVE_TRADING_ENABLED, "is_running": live_state.is_running, "bankroll": live_state.bankroll}
+
+
+@app.get("/api/live/status")
+async def get_live_status(db: Session = Depends(get_db)):
+    """Get live trading status."""
+    from backend.data.polymarket_executor import get_executor
+    executor = get_executor()
+    live_state = get_bot_state(db, is_live=True)
+    return {
+        "live_enabled": settings.LIVE_TRADING_ENABLED,
+        "is_running": live_state.is_running,
+        "executor_stub": executor.is_stub,
+        "bankroll": live_state.bankroll,
+        "total_trades": live_state.total_trades,
+        "total_pnl": live_state.total_pnl,
+    }
+
+
+@app.post("/api/live/sync-balance")
+async def sync_live_balance(db: Session = Depends(get_db)):
+    """Sync live bankroll with actual USDC balance from Polymarket."""
+    from backend.core.scheduler import log_event
+
+    try:
+        from backend.data.polymarket_executor import get_executor
+        executor = get_executor()
+        if executor.is_stub:
+            return {"success": False, "message": "Executor is in stub mode"}
+
+        actual_balance = executor.get_usdc_balance()
+        live_state = get_bot_state(db, is_live=True)
+        live_state.bankroll = round(actual_balance, 2)
+        db.commit()
+
+        log_event("success", f"【实盘】Bankroll synced to USDC: ${actual_balance:.2f}")
+        return {"success": True, "bankroll": actual_balance}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
 
 
 @app.post("/api/bot/reset")
@@ -849,13 +992,19 @@ async def reset_bot(db: Session = Depends(get_db)):
 
     try:
         trades_deleted = db.query(Trade).delete()
-        state = db.query(BotState).first()
-        if state:
-            state.bankroll = settings.INITIAL_BANKROLL
-            state.total_trades = 0
-            state.winning_trades = 0
-            state.total_pnl = 0.0
-            state.is_running = True
+        # Reset sim state
+        sim_state = get_bot_state(db, is_live=False)
+        sim_state.bankroll = settings.INITIAL_BANKROLL
+        sim_state.total_trades = 0
+        sim_state.winning_trades = 0
+        sim_state.total_pnl = 0.0
+        sim_state.is_running = True
+        # Reset live state
+        live_state = get_bot_state(db, is_live=True)
+        live_state.bankroll = settings.LIVE_BANKROLL
+        live_state.total_trades = 0
+        live_state.winning_trades = 0
+        live_state.total_pnl = 0.0
 
         ai_logs_deleted = db.query(AILog).delete()
         db.commit()
@@ -866,7 +1015,8 @@ async def reset_bot(db: Session = Depends(get_db)):
             "status": "reset",
             "trades_deleted": trades_deleted,
             "ai_logs_deleted": ai_logs_deleted,
-            "new_bankroll": settings.INITIAL_BANKROLL
+            "new_bankroll": settings.INITIAL_BANKROLL,
+            "live_bankroll": settings.LIVE_BANKROLL,
         }
 
     except Exception as e:
@@ -881,6 +1031,11 @@ async def get_dashboard(db: Session = Depends(get_db)):
 
     stats = await get_stats(db)
 
+    # Extract sim and live stats from the stats response
+    sim_stats = stats["sim"]
+    live_stats = stats["live"]
+    live_enabled = stats["live_enabled"]
+
     # Fetch microstructure, markets, and signals in parallel
     micro_task = asyncio.create_task(_safe_compute_microstructure())
     markets_task = asyncio.create_task(fetch_active_btc_markets())
@@ -888,7 +1043,10 @@ async def get_dashboard(db: Session = Depends(get_db)):
 
     # DB queries can run while network calls are in flight
     trades = db.query(Trade).order_by(Trade.timestamp.desc()).limit(50).all()
-    equity_trades = db.query(Trade).filter(Trade.settled == True).order_by(Trade.timestamp).all()
+    equity_trades = db.query(Trade).filter(
+        Trade.settled == True,
+        Trade.is_live == False
+    ).order_by(Trade.timestamp).all()
     calibration = _compute_calibration_summary(db)
 
     # Await parallel results
@@ -925,10 +1083,12 @@ async def get_dashboard(db: Session = Depends(get_db)):
             direction=t.direction,
             entry_price=t.entry_price,
             size=t.size,
+            shares=getattr(t, 'shares', 0.0) or 0.0,
             timestamp=t.timestamp,
             settled=t.settled,
             result=t.result,
-            pnl=t.pnl
+            pnl=t.pnl,
+            is_live=getattr(t, 'is_live', False),
         )
         for t in trades
     ]
@@ -977,7 +1137,9 @@ async def get_dashboard(db: Session = Depends(get_db)):
             pass
 
     return DashboardData(
-        stats=stats,
+        stats=sim_stats,
+        live_stats=live_stats,
+        live_enabled=live_enabled,
         btc_price=btc_price_data,
         microstructure=micro_data,
         windows=windows,

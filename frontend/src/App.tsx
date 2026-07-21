@@ -192,7 +192,12 @@ function App() {
 
         <div className="flex-1" />
 
-        <StatsCards stats={stats} />
+        <StatsCards
+          stats={stats}
+          liveStats={data?.live_stats}
+          liveEnabled={data?.live_enabled}
+          onToggleLive={() => queryClient.invalidateQueries({ queryKey: ['dashboard'] })}
+        />
 
         <div className="flex items-center gap-2 shrink-0">
           <button

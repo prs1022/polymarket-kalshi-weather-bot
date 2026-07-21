@@ -41,6 +41,8 @@ class BtcMarket:
     window_end: datetime
     volume: float
     closed: bool
+    up_token_id: str = ""    # CLOB token ID for UP outcome
+    down_token_id: str = ""  # CLOB token ID for DOWN outcome
 
     @property
     def event_slug(self) -> str:
@@ -200,6 +202,9 @@ async def _enrich_with_clob_prices(event: dict, market: BtcMarket):
         token_ids = json.loads(token_ids_raw) if isinstance(token_ids_raw, str) else token_ids_raw
         if not isinstance(token_ids, list) or len(token_ids) < 2:
             return
+
+        market.up_token_id = token_ids[0]
+        market.down_token_id = token_ids[1]
 
         async with httpx.AsyncClient(timeout=5.0) as client:
             up_resp = await client.get(

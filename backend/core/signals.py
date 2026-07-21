@@ -185,8 +185,14 @@ async def generate_btc_signal(market: BtcMarket) -> Optional[TradingSignal]:
     up_votes = sum(1 for s in indicator_signs if s > 0.05)
     down_votes = sum(1 for s in indicator_signs if s < -0.05)
 
-    # Convergence: require 2/4 indicators to agree (3/4 was too strict — killed all signals)
-    has_convergence = up_votes >= 2 or down_votes >= 2
+    # Convergence: require all 4 indicators to agree.
+    # Data analysis of 451 settled trades:
+    #   4/4 convergence → 49.9% accuracy (coin flip — but model base was 0.50, not market)
+    #   3/4 convergence → 35.0% accuracy (anti-predictive!)
+    #   2/4 convergence → 39.5% accuracy (also anti-predictive)
+    # With market-based model, 4/4 convergence + market base should improve Brier.
+    min_convergence = settings.MIN_CONVERGENCE
+    has_convergence = up_votes >= min_convergence or down_votes >= min_convergence
 
     # --- Weighted composite ---
     w = settings
@@ -198,29 +204,58 @@ async def generate_btc_signal(market: BtcMarket) -> Optional[TradingSignal]:
         + skew_signal * w.WEIGHT_MARKET_SKEW
     )
 
-    # Convert composite (-1..+1) to probability (0.40..0.60)
-    # Narrower range: data showed high-edge signals were anti-predictive.
-    # Keeping probabilities closer to 0.50 avoids overconfident Kelly sizing.
-    model_up_prob = 0.50 + composite * 0.10
-    model_up_prob = max(0.40, min(0.60, model_up_prob))
+    # --- Market-based probability model ---
+    # OLD: model started at 0.50 and ignored market price entirely.
+    #   When market said 35% and model said 50%, the "15% edge" was FAKE.
+    #   The market was right — actual win rate was 24%.
+    #
+    # NEW: model starts at MARKET PRICE, then adjusts by composite.
+    #   model_prob = market_prob + composite * COMPOSITE_MULTIPLIER
+    #   Edge = model_prob - market_prob = composite * COMPOSITE_MULTIPLIER
+    #   When composite = 0 (no signal): model = market → edge = 0 → no trade
+    #   When composite = 0.5 (moderate agreement): edge = 7.5% (real signal)
+    #   When composite = 1.0 (all indicators max bullish): edge = 15%
+    #
+    # This eliminates fake edges from clamp artifacts and improves Brier
+    # because the base prediction (market price) is well-calibrated.
+    deviation = composite * settings.COMPOSITE_MULTIPLIER
+    model_up_prob = market_up_prob + deviation
+    # Clamp deviation to ±MAX_MODEL_DEVIATION from market price
+    model_up_prob = max(
+        market_up_prob - settings.MAX_MODEL_DEVIATION,
+        min(market_up_prob + settings.MAX_MODEL_DEVIATION, model_up_prob)
+    )
+    # Safety clamp to [0.05, 0.95]
+    model_up_prob = max(0.05, min(0.95, model_up_prob))
 
     # Calculate edge and direction
     edge, direction = calculate_edge(model_up_prob, market_up_prob)
 
-    # --- Entry price filter: only buy the cheap side (≤ MAX_ENTRY_PRICE) ---
+    # --- Signal inversion switch ---
+    # Data shows the model is anti-predictive (win rate < 50%).
+    # Flipping the direction turns anti-predictive into predictive.
+    # Toggle via config INVERT_SIGNAL.
+    if settings.INVERT_SIGNAL:
+        if direction == "up":
+            direction = "down"
+            edge = (1 - model_up_prob) - (1 - market_up_prob)  # recalculate edge for inverted direction
+        else:
+            direction = "up"
+            edge = model_up_prob - market_up_prob
+
+    # --- Entry price filter: only buy in the sweet spot [MIN, MAX] ---
     if direction == "up":
         entry_price = market_up_prob
     else:
         entry_price = market.down_price
 
-    # --- Extreme market price filter ---
-    # When market price is < 0.25 or > 0.75, the market is heavily one-sided.
-    # Our model is clamped to [0.40, 0.60], so any "edge" against a market
-    # beyond 25/75 is mostly a floor/ceiling artifact, not a real prediction.
-    # Example: model DOWN = 51%, market DOWN = 25% → edge = 26% (fake!)
-    #   The model barely disagrees (51% vs 49%), but the 26% gap is just
-    #   the clamp floor (40%) minus the market price (25%).
-    market_extreme = market_up_prob < 0.25 or market_up_prob > 0.75
+    # --- Entry price floor: don't buy tokens below MIN_ENTRY_PRICE ---
+    # Data analysis of 451 settled trades shows:
+    #   entry < 40c → 24% win rate (fake edge from model clamp [0.40-0.60])
+    #   entry 40-50c → 78% win rate (real signal)
+    # The model outputs ~0.50, so when market price is 35c, the "edge" is
+    # just 50%-35%=15% — a clamp artifact, not a real prediction.
+    # This floor replaces the old market_extreme filter at 0.25.
 
     # Time-remaining filter: only trade windows in the sweet spot
     now = datetime.utcnow()
@@ -233,9 +268,9 @@ async def generate_btc_signal(market: BtcMarket) -> Optional[TradingSignal]:
 
     passes_filters = (
         has_convergence
+        and entry_price >= settings.MIN_ENTRY_PRICE
         and entry_price <= settings.MAX_ENTRY_PRICE
         and time_ok
-        and not market_extreme
     )
 
     # Zero out edge if filters fail (signal still returned for UI visibility)
@@ -262,9 +297,11 @@ async def generate_btc_signal(market: BtcMarket) -> Optional[TradingSignal]:
     filter_status = "ACTIONABLE" if passes_filters else "FILTERED"
     filter_reasons = []
     if not has_convergence:
-        filter_reasons.append(f"convergence {max(up_votes, down_votes)}/4 < 2")
+        filter_reasons.append(f"convergence {max(up_votes, down_votes)}/4 < {settings.MIN_CONVERGENCE}")
     if not time_ok:
         filter_reasons.append(f"time {time_remaining:.0f}s not in [{settings.MIN_TIME_REMAINING},{settings.MAX_TIME_REMAINING}]")
+    if entry_price < settings.MIN_ENTRY_PRICE:
+        filter_reasons.append(f"entry {entry_price:.0%} < {settings.MIN_ENTRY_PRICE:.0%}")
     if entry_price > settings.MAX_ENTRY_PRICE:
         filter_reasons.append(f"entry {entry_price:.0%} > {settings.MAX_ENTRY_PRICE:.0%}")
     filter_note = f" [{', '.join(filter_reasons)}]" if filter_reasons else ""

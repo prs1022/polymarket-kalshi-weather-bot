@@ -88,6 +88,7 @@ export function TradesTable({ trades }: Props) {
               Size <SortIcon column="size" />
             </div>
           </th>
+          <th className="py-1.5 px-1.5 font-medium text-right">Shares</th>
           <th
             className="py-1.5 px-1.5 font-medium text-right cursor-pointer hover:text-neutral-400"
             onClick={() => handleSort('pnl')}
@@ -135,6 +136,9 @@ export function TradesTable({ trades }: Props) {
                   }`}>
                     {isPending ? 'PND' : isWin ? 'WIN' : 'LOSS'}
                   </span>
+                  {trade.is_live && (
+                    <span className="ml-0.5 text-[8px] font-bold uppercase text-orange-400">●</span>
+                  )}
                 </td>
                 <td className="py-1 px-1.5">
                   <span className="text-neutral-400 truncate block max-w-[100px]" title={trade.event_slug || trade.market_ticker}>
@@ -148,6 +152,9 @@ export function TradesTable({ trades }: Props) {
                 </td>
                 <td className="py-1 px-1.5 text-right text-neutral-300 tabular-nums">
                   ${trade.size.toFixed(0)}
+                </td>
+                <td className="py-1 px-1.5 text-right text-neutral-400 tabular-nums text-[10px]">
+                  {trade.shares ? trade.shares.toFixed(1) : '-'}
                 </td>
                 <td className="py-1 px-1.5 text-right">
                   {trade.pnl !== null ? (

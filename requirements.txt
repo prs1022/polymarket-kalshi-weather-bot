@@ -33,3 +33,6 @@ structlog>=24.1.0
 python-dotenv>=1.0.1
 orjson==3.9.10
 websockets>=13.0  # compat with yfinance; also satisfies uvicorn[standard]
+
+# Polymarket CLOB (live trading)
+py-clob-client-v2>=1.0.0

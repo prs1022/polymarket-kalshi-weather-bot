@@ -19,16 +19,17 @@ PORT="${PORT:-8000}"
 
 # Python 路径(自动检测: conda > venv > system)
 # 优先用有 uvicorn 的环境
-if command -v python3 &>/dev/null && python3 -c "import uvicorn" 2>/dev/null; then
-    # 当前环境已有 uvicorn (conda/system)
-    PYTHON_CMD="python3"
-elif [ -f "$APP_DIR/venv/bin/python" ] && "$APP_DIR/venv/bin/python" -c "import uvicorn" 2>/dev/null; then
-    PYTHON_CMD="$APP_DIR/venv/bin/python"
-elif [ -f "$APP_DIR/.venv/bin/python" ] && "$APP_DIR/.venv/bin/python" -c "import uvicorn" 2>/dev/null; then
-    PYTHON_CMD="$APP_DIR/.venv/bin/python"
-else
-    PYTHON_CMD="python3"
-fi
+# if command -v python3 &>/dev/null && python3 -c "import uvicorn" 2>/dev/null; then
+#     # 当前环境已有 uvicorn (conda/system)
+#     PYTHON_CMD="python3"
+# elif [ -f "$APP_DIR/venv/bin/python" ] && "$APP_DIR/venv/bin/python" -c "import uvicorn" 2>/dev/null; then
+#     PYTHON_CMD="$APP_DIR/venv/bin/python"
+# elif [ -f "$APP_DIR/.venv/bin/python" ] && "$APP_DIR/.venv/bin/python" -c "import uvicorn" 2>/dev/null; then
+#     PYTHON_CMD="$APP_DIR/.venv/bin/python"
+# else
+#     PYTHON_CMD="python3"
+# fi
+PYTHON_CMD="$(which python3)"
 
 mkdir -p "$LOG_DIR"
 mkdir -p "$APP_DIR/.run"

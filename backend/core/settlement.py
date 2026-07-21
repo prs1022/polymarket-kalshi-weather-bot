@@ -6,7 +6,7 @@ from datetime import datetime, date
 from typing import Optional, List, Tuple
 from sqlalchemy.orm import Session
 
-from backend.models.database import Trade, BotState, Signal
+from backend.models.database import Trade, BotState, Signal, get_bot_state
 
 logger = logging.getLogger("trading_bot")
 
@@ -126,27 +126,31 @@ def calculate_pnl(trade: Trade, settlement_value: float) -> float:
 
     settlement_value: 1.0 if Up/Yes outcome, 0.0 if Down/No outcome
 
-    Maps up->yes, down->no internally:
-    - UP position wins when settlement = 1.0
-    - DOWN position wins when settlement = 0.0
+    PnL = revenue - cost
+    - cost = trade.size (dollars spent buying shares)
+    - revenue = shares * $1.00 if won, shares * $0.00 if lost
+    - shares = trade.shares (or size / entry_price as fallback)
     """
-    # Map up/down to yes/no logic
+    # Determine if we won
     direction = trade.direction
     if direction == "up":
-        direction = "yes"
+        won = (settlement_value == 1.0)
     elif direction == "down":
-        direction = "no"
+        won = (settlement_value == 0.0)
+    else:  # "yes" / "no"
+        won = (direction == "yes" and settlement_value == 1.0) or \
+              (direction == "no" and settlement_value == 0.0)
 
-    if direction == "yes":
-        if settlement_value == 1.0:
-            pnl = trade.size * (1.0 - trade.entry_price)
-        else:
-            pnl = -trade.size * trade.entry_price
-    else:  # NO / DOWN position
-        if settlement_value == 0.0:
-            pnl = trade.size * (1.0 - trade.entry_price)
-        else:
-            pnl = -trade.size * trade.entry_price
+    # Get shares (fallback for old trades without shares field)
+    shares = getattr(trade, 'shares', None)
+    if not shares or shares == 0:
+        shares = trade.size / trade.entry_price if trade.entry_price > 0 else 0
+
+    # PnL = revenue - cost
+    if won:
+        pnl = shares * 1.0 - trade.size   # Each share pays $1.00
+    else:
+        pnl = -trade.size                  # Shares worth $0, lose entire cost
 
     return round(pnl, 2)
 
@@ -156,6 +160,9 @@ async def check_market_settlement(trade: Trade) -> Tuple[bool, Optional[float], 
     Check if a trade's market has settled.
 
     Returns: (is_settled, settlement_value, pnl)
+
+    If the trade has stop_loss_filled=True, PnL = 0 (break-even exit).
+    settlement_value is still recorded for direction correctness analysis.
     """
     is_resolved, settlement_value = await fetch_polymarket_resolution(
         trade.market_ticker,
@@ -165,14 +172,21 @@ async def check_market_settlement(trade: Trade) -> Tuple[bool, Optional[float], 
     if not is_resolved or settlement_value is None:
         return False, None, None
 
-    pnl = calculate_pnl(trade, settlement_value)
-
-    mapped_dir = "UP" if trade.direction in ("up", "yes") else "DOWN"
-    outcome = "UP" if settlement_value == 1.0 else "DOWN"
-    result = "WIN" if mapped_dir == outcome else "LOSS"
-
-    logger.info(f"Trade {trade.id} settled: {mapped_dir} @ {trade.entry_price:.0%} -> "
-                f"{result} P&L: ${pnl:+.2f}")
+    # If stop-loss was filled, we exited at break-even before settlement
+    if getattr(trade, 'stop_loss_filled', False):
+        pnl = 0.0
+        mapped_dir = "UP" if trade.direction in ("up", "yes") else "DOWN"
+        outcome = "UP" if settlement_value == 1.0 else "DOWN"
+        would_win = "WOULD WIN" if mapped_dir == outcome else "WOULD LOSS"
+        logger.info(f"Trade {trade.id} stop-loss settled: {mapped_dir} @ {trade.entry_price:.0%} -> "
+                    f"{would_win} but exited at break-even, P&L: $0.00")
+    else:
+        pnl = calculate_pnl(trade, settlement_value)
+        mapped_dir = "UP" if trade.direction in ("up", "yes") else "DOWN"
+        outcome = "UP" if settlement_value == 1.0 else "DOWN"
+        result = "WIN" if mapped_dir == outcome else "LOSS"
+        logger.info(f"Trade {trade.id} settled: {mapped_dir} @ {trade.entry_price:.0%} -> "
+                    f"{result} P&L: ${pnl:+.2f}")
 
     return True, settlement_value, pnl
 
@@ -260,7 +274,10 @@ async def settle_pending_trades(db: Session) -> List[Trade]:
                 trade.pnl = pnl
                 trade.settlement_time = datetime.utcnow()
 
-                if pnl is not None and pnl > 0:
+                if getattr(trade, 'stop_loss_filled', False):
+                    # Stop-loss exited at break-even
+                    trade.result = "stop_loss"
+                elif pnl is not None and pnl > 0:
                     trade.result = "win"
                 elif pnl is not None and pnl < 0:
                     trade.result = "loss"
@@ -297,25 +314,45 @@ async def settle_pending_trades(db: Session) -> List[Trade]:
 
 
 async def update_bot_state_with_settlements(db: Session, settled_trades: List[Trade]) -> None:
-    """Update bot state with P&L from settled trades."""
+    """Update bot state with P&L from settled trades.
+    Updates the correct BotState (sim or live) based on trade.is_live.
+    """
     if not settled_trades:
         return
 
     try:
-        state = db.query(BotState).first()
-        if not state:
-            logger.warning("Bot state not found")
-            return
+        # Group settled trades by is_live
+        sim_trades = [t for t in settled_trades if not t.is_live]
+        live_trades = [t for t in settled_trades if t.is_live]
 
-        for trade in settled_trades:
-            if trade.pnl is not None:
-                state.total_pnl += trade.pnl
-                state.bankroll += trade.pnl
-                if trade.result == "win":
-                    state.winning_trades += 1
+        # Update sim state
+        if sim_trades:
+            sim_state = get_bot_state(db, is_live=False)
+            for trade in sim_trades:
+                if trade.pnl is not None:
+                    sim_state.total_pnl += trade.pnl
+                    sim_state.bankroll += trade.pnl
+                    if trade.result == "win":
+                        sim_state.winning_trades += 1
+
+        # Update live state
+        if live_trades:
+            live_state = get_bot_state(db, is_live=True)
+            for trade in live_trades:
+                if trade.pnl is not None:
+                    live_state.total_pnl += trade.pnl
+                    live_state.bankroll += trade.pnl
+                    if trade.result == "win":
+                        live_state.winning_trades += 1
 
         db.commit()
-        logger.info(f"Updated bot state: Bankroll ${state.bankroll:.2f}, P&L ${state.total_pnl:+.2f}")
+
+        # Log stats
+        for is_live, trades in [(False, sim_trades), (True, live_trades)]:
+            if trades:
+                state = get_bot_state(db, is_live=is_live)
+                tag = "LIVE" if is_live else "SIM"
+                logger.info(f"[{tag}] Updated bot state: Bankroll ${state.bankroll:.2f}, P&L ${state.total_pnl:+.2f}")
     except Exception as e:
         logger.error(f"Failed to update bot state: {e}")
         db.rollback()

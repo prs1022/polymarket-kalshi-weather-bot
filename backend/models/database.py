@@ -18,7 +18,7 @@ Base = declarative_base()
 
 
 class Trade(Base):
-    """Simulated trades for tracking P&L."""
+    """Trades for tracking P&L (sim and live)."""
     __tablename__ = "trades"
 
     id = Column(Integer, primary_key=True, index=True)
@@ -27,11 +27,13 @@ class Trade(Base):
     platform = Column(String)
     event_slug = Column(String, nullable=True)
     market_type = Column(String, default="btc", index=True)  # "btc" or "weather"
+    is_live = Column(Boolean, default=False, index=True)  # False=sim, True=live
 
     # Trade details
     direction = Column(String)  # "up" or "down"
     entry_price = Column(Float)   # Weighted avg of filled grid orders (updated live)
-    size = Column(Float)           # Total dollar amount across filled orders
+    size = Column(Float)           # Total dollar amount spent (cost)
+    shares = Column(Float, default=0.0)  # Number of shares bought
     timestamp = Column(DateTime, default=datetime.utcnow)
 
     # Grid settings
@@ -51,6 +53,12 @@ class Trade(Base):
     market_price_at_entry = Column(Float)
     edge_at_entry = Column(Float)
 
+    # Stop-loss tracking
+    stop_loss_price = Column(Float, nullable=True)        # Sell limit price (= avg entry when grid fully fills)
+    stop_loss_filled = Column(Boolean, default=False)      # Whether the stop-loss sell order filled
+    stop_loss_filled_at = Column(DateTime, nullable=True)  # When the stop-loss filled
+    stop_loss_order_id = Column(String, nullable=True)    # CLOB sell order ID (live trades only)
+
 
 class GridOrder(Base):
     """Individual limit orders within a Fibonacci grid."""
@@ -66,6 +74,7 @@ class GridOrder(Base):
     status = Column(String, default="pending")  # pending, filled, expired
     filled_at = Column(DateTime, nullable=True)
     fill_price = Column(Float, nullable=True)  # Actual fill price (may differ from limit)
+    clob_order_id = Column(String, nullable=True)  # Polymarket CLOB order ID (live trades only)
 
 
 class BtcPriceSnapshot(Base):
@@ -79,10 +88,11 @@ class BtcPriceSnapshot(Base):
 
 
 class BotState(Base):
-    """Bot state and statistics."""
+    """Bot state and statistics (one row per mode: sim and live)."""
     __tablename__ = "bot_state"
 
     id = Column(Integer, primary_key=True)
+    is_live = Column(Boolean, default=False, index=True)  # False=sim, True=live
     bankroll = Column(Float, default=10000.0)
     total_trades = Column(Integer, default=0)
     winning_trades = Column(Integer, default=0)
@@ -209,6 +219,81 @@ def ensure_schema():
             except Exception:
                 pass
 
+    # Add shares column to trades table
+    if "shares" not in columns:
+        try:
+            with engine.connect() as conn:
+                with conn.begin():
+                    conn.execute(text("ALTER TABLE trades ADD COLUMN shares FLOAT DEFAULT 0.0"))
+        except Exception:
+            pass
+
+    # Add is_live column to trades table
+    if "is_live" not in columns:
+        try:
+            with engine.connect() as conn:
+                with conn.begin():
+                    conn.execute(text("ALTER TABLE trades ADD COLUMN is_live BOOLEAN DEFAULT 0"))
+        except Exception:
+            pass
+
+    # Add clob_order_id column to grid_orders table
+    try:
+        grid_columns = [col["name"] for col in inspector.get_columns("grid_orders")]
+    except Exception:
+        grid_columns = []
+    if grid_columns and "clob_order_id" not in grid_columns:
+        try:
+            with engine.connect() as conn:
+                with conn.begin():
+                    conn.execute(text("ALTER TABLE grid_orders ADD COLUMN clob_order_id VARCHAR"))
+        except Exception:
+            pass
+
+    # Add is_live column to bot_state table and ensure two rows exist
+    try:
+        state_columns = [col["name"] for col in inspector.get_columns("bot_state")]
+    except Exception:
+        state_columns = []
+    if state_columns and "is_live" not in state_columns:
+        try:
+            with engine.connect() as conn:
+                with conn.begin():
+                    conn.execute(text("ALTER TABLE bot_state ADD COLUMN is_live BOOLEAN DEFAULT 0"))
+        except Exception:
+            pass
+
+    # Ensure both sim and live BotState rows exist
+    with engine.connect() as conn:
+        sim_exists = conn.execute(text("SELECT COUNT(*) FROM bot_state WHERE is_live = 0")).scalar()
+        if not sim_exists:
+            conn.execute(text(
+                "INSERT INTO bot_state (is_live, bankroll, total_trades, winning_trades, total_pnl, is_running) "
+                "VALUES (0, 10000.0, 0, 0, 0.0, 0)"
+            ))
+        live_exists = conn.execute(text("SELECT COUNT(*) FROM bot_state WHERE is_live = 1")).scalar()
+        if not live_exists:
+            conn.execute(text(
+                "INSERT INTO bot_state (is_live, bankroll, total_trades, winning_trades, total_pnl, is_running) "
+                "VALUES (1, 0.0, 0, 0, 0.0, 0)"
+            ))
+        conn.commit()
+
+    # Add stop-loss columns to trades table
+    for col, coltype in [
+        ("stop_loss_price", "FLOAT"),
+        ("stop_loss_filled", "BOOLEAN DEFAULT 0"),
+        ("stop_loss_filled_at", "DATETIME"),
+        ("stop_loss_order_id", "VARCHAR"),
+    ]:
+        if col not in columns:
+            try:
+                with engine.connect() as conn:
+                    with conn.begin():
+                        conn.execute(text(f"ALTER TABLE trades ADD COLUMN {col} {coltype}"))
+            except Exception:
+                pass
+
     # Add calibration columns to signals table
     try:
         signal_columns = [col["name"] for col in inspector.get_columns("signals")]
@@ -239,3 +324,13 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def get_bot_state(db, is_live: bool = False) -> BotState:
+    """Get BotState for sim (is_live=False) or live (is_live=True) mode."""
+    state = db.query(BotState).filter(BotState.is_live == is_live).first()
+    if not state:
+        state = BotState(is_live=is_live, bankroll=10000.0 if not is_live else 0.0)
+        db.add(state)
+        db.flush()
+    return state

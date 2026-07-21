@@ -32,8 +32,8 @@ export async function fetchTrades(): Promise<Trade[]> {
   return data
 }
 
-export async function fetchStats(): Promise<BotStats> {
-  const { data } = await api.get<BotStats>('/stats')
+export async function fetchStats(): Promise<{ sim: BotStats; live: BotStats; live_enabled: boolean }> {
+  const { data } = await api.get('/stats')
   return data
 }
 
@@ -64,8 +64,18 @@ export async function settleTradesApi(): Promise<{ settled_count: number }> {
   return data
 }
 
-export async function resetBot(): Promise<{ status: string; trades_deleted: number; new_bankroll: number }> {
+export async function resetBot(): Promise<{ status: string; trades_deleted: number; new_bankroll: number; live_bankroll: number }> {
   const { data } = await api.post('/bot/reset')
+  return data
+}
+
+export async function toggleLiveTrading(): Promise<{ live_enabled: boolean; is_running: boolean }> {
+  const { data } = await api.post('/live/toggle')
+  return data
+}
+
+export async function fetchLiveStatus(): Promise<{ live_enabled: boolean; is_running: boolean; executor_stub: boolean; bankroll: number; total_trades: number; total_pnl: number }> {
+  const { data } = await api.get('/live/status')
   return data
 }
 

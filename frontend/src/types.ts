@@ -60,11 +60,13 @@ export interface Trade {
   event_slug?: string | null
   direction: string
   entry_price: number
-  size: number
+  size: number           // Dollar amount spent
+  shares: number         // Number of shares bought
   timestamp: string
   settled: boolean
   result: string
   pnl: number | null
+  is_live?: boolean      // false=sim, true=live
 }
 
 export interface BotStats {
@@ -75,6 +77,7 @@ export interface BotStats {
   total_pnl: number
   is_running: boolean
   last_run: string | null
+  is_live?: boolean      // false=sim, true=live
 }
 
 export interface EquityPoint {
@@ -127,6 +130,8 @@ export interface WeatherSignal {
 
 export interface DashboardData {
   stats: BotStats
+  live_stats?: BotStats | null
+  live_enabled?: boolean
   btc_price: BtcPrice | null
   microstructure: Microstructure | null
   windows: BtcWindow[]
