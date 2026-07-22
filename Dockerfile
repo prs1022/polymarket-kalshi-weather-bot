@@ -13,6 +13,8 @@ RUN npm ci
 COPY frontend/ .
 # Build with empty API URL → frontend uses same-origin relative paths
 ENV VITE_API_URL=""
+# Increase Node.js heap limit to avoid OOM during Vite build
+ENV NODE_OPTIONS="--max-old-space-size=2048"
 RUN npm run build
 
 # ============================================

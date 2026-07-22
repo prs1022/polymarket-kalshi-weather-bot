@@ -317,11 +317,6 @@ async def shutdown():
 
 
 # Core endpoints
-@app.get("/")
-async def root():
-    return {"status": "ok", "message": "BTC 5-Min Trading Bot API v3.0", "simulation_mode": settings.SIMULATION_MODE}
-
-
 @app.get("/api/health")
 async def health():
     return {"status": "healthy"}
