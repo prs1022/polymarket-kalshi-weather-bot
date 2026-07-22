@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+env/
+*.egg-info/
+
+# Frontend dependencies (will be installed fresh in Docker)
+frontend/node_modules/
+
+# Build artifacts
+frontend/dist/
+frontend/build/
+
+# Database
+*.db
+*.sqlite3
+data/
+
+# Environment (provided at runtime via docker-compose env_file)
+.env
+.env.local
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+
+# Logs
+.run/
+*.log
+logs/
+
+# Docs (not needed in image)
+docs/
+*.md
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test scripts (not needed in production image)
+check_*.py
+test_*.py
+diagnose_*.py
+manual_*.py
+risk_analysis.py
+verify_logic.py
+reset_database.py
+new_config_analysis.py
