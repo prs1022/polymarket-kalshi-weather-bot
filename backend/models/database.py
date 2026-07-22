@@ -58,6 +58,7 @@ class Trade(Base):
     stop_loss_filled = Column(Boolean, default=False)      # Whether the stop-loss sell order filled
     stop_loss_filled_at = Column(DateTime, nullable=True)  # When the stop-loss filled
     stop_loss_order_id = Column(String, nullable=True)    # CLOB sell order ID (live trades only)
+    token_id = Column(String, nullable=True)              # CLOB token ID (stored at trade creation for sell orders)
 
 
 class GridOrder(Base):
@@ -293,6 +294,15 @@ def ensure_schema():
                         conn.execute(text(f"ALTER TABLE trades ADD COLUMN {col} {coltype}"))
             except Exception:
                 pass
+
+    # Add token_id column to trades table
+    if "token_id" not in columns:
+        try:
+            with engine.connect() as conn:
+                with conn.begin():
+                    conn.execute(text("ALTER TABLE trades ADD COLUMN token_id VARCHAR"))
+        except Exception:
+            pass
 
     # Add calibration columns to signals table
     try:

@@ -208,19 +208,17 @@ async def check_grid_fills_job():
                             
                             # For live trades, place or update real sell order
                             if not executor.is_stub:
-                                market = market_map.get(trade.event_slug)
-                                token_id = None
-                                if market:
-                                    token_id = market.up_token_id if trade.direction == "up" else market.down_token_id
+                                # Use stored token_id (persisted at trade creation)
+                                sell_token_id = trade.token_id
                                 
-                                if token_id:
+                                if sell_token_id:
                                     # Cancel old sell order if exists
                                     if trade.stop_loss_order_id:
                                         executor.cancel_order(trade.stop_loss_order_id)
                                         
                                     # Place new sell order at updated stop-loss price
                                     sell_order_id = executor.place_limit_sell(
-                                        token_id=token_id,
+                                        token_id=sell_token_id,
                                         price=trade.stop_loss_price,
                                         shares=trade.grid_filled_shares,
                                     )
@@ -241,7 +239,7 @@ async def check_grid_fills_job():
                                         )
                                 else:
                                     log_event("warning",
-                                        f"【实盘】止损单未挂出: 未找到token_id for {trade.event_slug}"
+                                        f"【实盘】止损单未挂出: trade无token_id for {trade.event_slug}"
                                     )
                             else:
                                 log_event("data",
@@ -490,6 +488,10 @@ async def scan_and_trade_job():
                     ).first()
 
                     if not existing_live:
+                        # Resolve token_id before creating trade (needed for buy orders and sell orders)
+                        executor = get_executor()
+                        token_id = signal.market.up_token_id if signal.direction == "up" else signal.market.down_token_id
+
                         live_trade = Trade(
                             market_ticker=signal.market.market_id,
                             platform="polymarket",
@@ -505,13 +507,12 @@ async def scan_and_trade_job():
                             grid_filled_cost=0.0,
                             grid_filled_shares=0.0,
                             is_live=True,
+                            token_id=token_id,
                         )
                         db.add(live_trade)
                         db.flush()
 
                         # Create grid orders with real CLOB orders
-                        executor = get_executor()
-                        token_id = signal.market.up_token_id if signal.direction == "up" else signal.market.down_token_id
 
                         for gl in grid_levels:
                             clob_order_id = None
