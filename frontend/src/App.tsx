@@ -15,6 +15,7 @@ import { formatCountdown } from './utils'
 import type { BtcWindow } from './types'
 
 const GlobeView = lazy(() => import('./components/GlobeView').then(m => ({ default: m.GlobeView })))
+import { ErrorBoundary } from './components/ErrorBoundary'
 
 function LiveClock() {
   const [time, setTime] = useState(new Date())
@@ -277,6 +278,7 @@ function App() {
           {/* Globe - top 60% */}
           <div className="relative" style={{ height: '58%' }}>
             <div className="absolute inset-0">
+              <ErrorBoundary>
               <Suspense fallback={
                 <div className="w-full h-full flex items-center justify-center bg-black">
                   <span className="text-[10px] text-neutral-600 uppercase tracking-wider">Loading Globe...</span>
@@ -284,6 +286,7 @@ function App() {
               }>
                 <GlobeView forecasts={weatherForecasts} signals={weatherSignals} />
               </Suspense>
+              </ErrorBoundary>
             </div>
             {/* Globe overlay: actionable count */}
             <div className="absolute top-2 left-2 z-10">
