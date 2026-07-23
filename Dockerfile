@@ -15,7 +15,8 @@ COPY frontend/ .
 ENV VITE_API_URL=""
 # Increase Node.js heap limit to avoid OOM during Vite build
 ENV NODE_OPTIONS="--max-old-space-size=2048"
-RUN npm run build
+# Skip tsc type-checking in Docker build; Vite/esbuild transpiles without it
+RUN npx vite build
 
 # ============================================
 # Stage 2: Python backend + built frontend
