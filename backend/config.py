@@ -48,11 +48,11 @@ class Settings(BaseSettings):
     SETTLEMENT_INTERVAL_SECONDS: int = 60  # 结算检查间隔（秒） - 每1分钟检查结算
     BTC_PRICE_SOURCE: str = "coinbase"  # BTC价格数据源
     MIN_EDGE_THRESHOLD: float = 0.07  # 最小优势阈值（7%） - 低于此值不开单
-    MIN_ENTRY_PRICE: float = 0.48  # 最低入场价格（40美分） - 低于此价格不买入
+    MIN_ENTRY_PRICE: float = 0.51  # 最低入场价格（40美分） - 低于此价格不买入
     MAX_ENTRY_PRICE: float = 0.55  # 最高入场价格（55美分） - 高于此价格不买入
     MAX_TRADES_PER_WINDOW: int = 1  # 每个时间窗口最多交易数
     MAX_TOTAL_PENDING_TRADES: int = 5  # 最大待结算单数（从20降到5，适配$10本金）
-    GRID_LEVELS: int = 4  # 网格订单层数（2层=2个挂单，3层=3个挂单）
+    GRID_LEVELS: int = 2  # 网格订单层数（2层=2个挂单，全部成交后才挂止损）
     GRID_MODE: str = "equal"  # 网格模式（"equal"=等间距均分，"fibonacci"=斐波那契间距）
     GRID_LOWER_BOUND: float = 0.20  # 网格下限价格（20美分）- 固定值，从当前价均分到30¢
 
@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     MIN_MARKET_VOLUME: float = 100.0  # 最小市场交易量（美元）
 
     # ==================== 天气市场配置 ====================
-    WEATHER_ENABLED: bool = True  # 天气市场交易开关
+    WEATHER_ENABLED: bool = False  # 天气市场交易开关
     WEATHER_SCAN_INTERVAL_SECONDS: int = 300  # 天气市场扫描间隔（5分钟）
     WEATHER_SETTLEMENT_INTERVAL_SECONDS: int = 1800  # 天气市场结算检查间隔（30分钟）
     WEATHER_MIN_EDGE_THRESHOLD: float = 0.08  # 天气市场最小优势阈值（8%）

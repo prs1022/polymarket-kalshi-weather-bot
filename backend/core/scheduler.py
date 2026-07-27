@@ -116,9 +116,11 @@ async def check_grid_fills_job():
                     update_trade_from_grid(trade, all_grid)
                     total_filled += len(newly_filled)
 
-                    # 渐进式止损：每成交一层就更新止损价
-                    # 止损价 = 当前平均成本 + 5美分（覆盖手续费）
-                    if settings.PROGRESSIVE_STOP_LOSS and trade.grid_filled_shares > 0:
+                    # 止损仅在全部网格层成交后挂出
+                    # 策略：全部层成交 = 市场大幅反向，此时挂止损保护
+                    #        只有部分层成交 = 市场小幅波动，持有等待结算
+                    all_grid_filled = all(o.status == "filled" for o in all_grid)
+                    if settings.PROGRESSIVE_STOP_LOSS and all_grid_filled:
                         new_stop_loss = round(trade.entry_price + settings.STOP_LOSS_OFFSET, 2)
                         old_stop_loss = trade.stop_loss_price
                         
@@ -128,13 +130,13 @@ async def check_grid_fills_job():
                             
                             if old_stop_loss is None:
                                 log_event("data",
-                                    f"【模拟】渐进式止损 - 第1层成交: {trade.event_slug} {trade.direction.upper()} "
+                                    f"【模拟】全部网格成交 - 挂止损: {trade.event_slug} {trade.direction.upper()} "
                                     f"成本 {trade.entry_price:.3f} → 止损 {trade.stop_loss_price:.3f} "
                                     f"(+{settings.STOP_LOSS_OFFSET:.2f})"
                                 )
                             else:
                                 log_event("data",
-                                    f"【模拟】渐进式止损 - 更新: {trade.event_slug} {trade.direction.upper()} "
+                                    f"【模拟】止损更新: {trade.event_slug} {trade.direction.upper()} "
                                     f"成本 {trade.entry_price:.3f} → 止损 {old_stop_loss:.3f}→{trade.stop_loss_price:.3f}"
                                 )
 
@@ -196,9 +198,11 @@ async def check_grid_fills_job():
                     update_trade_from_grid(trade, all_grid)
                     total_filled += len(newly_filled)
 
-                    # 渐进式止损：每成交一层就更新止损价
-                    # 止损价 = 当前平均成本 + 5美分（覆盖手续费）
-                    if settings.PROGRESSIVE_STOP_LOSS and trade.grid_filled_shares > 0:
+                    # 止损仅在全部网格层成交后挂出
+                    # 策略：全部层成交 = 市场大幅反向，此时挂止损保护
+                    #        只有部分层成交 = 市场小幅波动，持有等待结算
+                    all_grid_filled = all(o.status == "filled" for o in all_grid)
+                    if settings.PROGRESSIVE_STOP_LOSS and all_grid_filled:
                         new_stop_loss = round(trade.entry_price + settings.STOP_LOSS_OFFSET, 2)
                         old_stop_loss = trade.stop_loss_price
                         
@@ -227,13 +231,13 @@ async def check_grid_fills_job():
                                         
                                     if old_stop_loss is None:
                                         log_event("trade",
-                                            f"【实盘】渐进式止损 - 第1层: {trade.event_slug} "
+                                            f"【实盘】全部网格成交 - 挂止损: {trade.event_slug} "
                                             f"sell {trade.grid_filled_shares:.0f} @ {trade.stop_loss_price:.3f} "
                                             f"order={sell_order_id[:16] if sell_order_id else 'N/A'}..."
                                         )
                                     else:
                                         log_event("trade",
-                                            f"【实盘】渐进式止损 - 更新: {trade.event_slug} "
+                                            f"【实盘】止损更新: {trade.event_slug} "
                                             f"{old_stop_loss:.3f}→{trade.stop_loss_price:.3f} "
                                             f"order={sell_order_id[:16] if sell_order_id else 'N/A'}..."
                                         )
@@ -243,7 +247,7 @@ async def check_grid_fills_job():
                                     )
                             else:
                                 log_event("data",
-                                    f"【实盘-STUB】渐进式止损: {trade.event_slug} "
+                                    f"【实盘-STUB】全部网格成交止损: {trade.event_slug} "
                                     f"成本 {trade.entry_price:.3f} → 止损 {trade.stop_loss_price:.3f}"
                                 )
 

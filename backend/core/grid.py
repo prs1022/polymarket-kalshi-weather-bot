@@ -88,15 +88,22 @@ def generate_fibonacci_grid(
     fib_sum = sum(fib)
 
     # Generate raw grid levels (unscaled)
+    # Price range is divided so Level 0 is at grid_upper (top) and
+    # Level N-1 is at extreme_price (bottom).
     raw_levels = []
+    divisor = max(num_levels - 1, 1)  # Avoid division by zero when num_levels=1
     for i in range(num_levels):
         if settings.GRID_MODE == "equal":
-            # Equal spacing: each level is 1/N of the range apart
-            price = grid_upper - ((i + 1) / num_levels) * price_range
+            # Equal spacing: Level 0 at top, Level N-1 at bottom
+            price = grid_upper - (i / divisor) * price_range
         else:
             # Fibonacci spacing: cumulative Fibonacci distribution
-            cumulative = sum(fib[:i + 1])
-            price = grid_upper - (cumulative / fib_sum) * price_range
+            if num_levels == 1:
+                cumulative_frac = 0.0
+            else:
+                cumulative = sum(fib[:i + 1])
+                cumulative_frac = cumulative / fib_sum
+            price = grid_upper - cumulative_frac * price_range
 
         price = round(max(extreme_price, price), 2)
         size_mult = 1.0 + 0.1 * fib[i]
