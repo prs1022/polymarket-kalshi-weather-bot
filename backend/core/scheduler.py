@@ -204,7 +204,7 @@ async def check_grid_fills_job():
                             f"trade_id={trade.id}, order={go.clob_order_id[:16]}..., "
                             f"limit={go.limit_price}, clob_status={status_info.get('status')}"
                         )
-                        if status_info["status"] in ("matched", "filled"):
+                        if status_info["status"].lower() in ("matched", "filled"):
                             go.status = "filled"
                             go.fill_price = round(status_info["filled_price"], 2) if status_info["filled_price"] else go.limit_price
                             go.filled_at = datetime.utcnow()
@@ -307,7 +307,7 @@ async def check_grid_fills_job():
                     continue
                 
                 status_info = executor.get_order_status(trade.stop_loss_order_id)
-                if status_info["status"] in ("matched", "filled"):
+                if status_info["status"].lower() in ("matched", "filled"):
                     trade.stop_loss_filled = True
                     trade.stop_loss_filled_at = datetime.utcnow()
                     total_stop_loss += 1
