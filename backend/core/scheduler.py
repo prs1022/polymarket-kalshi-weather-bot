@@ -152,6 +152,13 @@ async def check_grid_fills_job():
             trade_ids = set(o.trade_id for o in live_pending)
             trades = db.query(Trade).filter(Trade.id.in_(trade_ids)).all()
 
+            logger.info(
+                f"[LIVE-DEBUG] Phase 1b: 检查 {len(live_pending)} 个挂单, "
+                f"涉及 {len(trades)} 笔交易, "
+                f"executor_stub={executor.is_stub}, "
+                f"trade_ids={list(trade_ids)}"
+            )
+
             # Get recent trades (fills) from CLOB API
             # This is more reliable than checking each order individually
             recent_trades = executor.get_recent_trades(limit=200)
@@ -173,6 +180,11 @@ async def check_grid_fills_job():
 
                 for go in trade_grid:
                     if not go.clob_order_id:
+                        logger.warning(
+                            f"[LIVE-DEBUG] 网格L{go.level}无CLOB订单ID: "
+                            f"trade_id={trade.id}, slug={trade.event_slug}, "
+                            f"limit={go.limit_price}, status={go.status}"
+                        )
                         continue
                     
                     # Check if this order appears in recent fills
@@ -187,6 +199,11 @@ async def check_grid_fills_job():
                         # Fallback: try individual order status check
                         # (in case trade is too recent to appear in trades list)
                         status_info = executor.get_order_status(go.clob_order_id)
+                        logger.info(
+                            f"[LIVE-DEBUG] 网格L{go.level}状态查询: "
+                            f"trade_id={trade.id}, order={go.clob_order_id[:16]}..., "
+                            f"limit={go.limit_price}, clob_status={status_info.get('status')}"
+                        )
                         if status_info["status"] in ("matched", "filled"):
                             go.status = "filled"
                             go.fill_price = round(status_info["filled_price"], 2) if status_info["filled_price"] else go.limit_price
@@ -202,6 +219,15 @@ async def check_grid_fills_job():
                     # 策略：全部层成交 = 市场大幅反向，此时挂止损保护
                     #        只有部分层成交 = 市场小幅波动，持有等待结算
                     all_grid_filled = all(o.status == "filled" for o in all_grid)
+                    grid_statuses = [(o.level, o.status) for o in all_grid]
+                    logger.info(
+                        f"[LIVE-DEBUG] 网格成交检查: trade_id={trade.id}, "
+                        f"slug={trade.event_slug}, "
+                        f"all_filled={all_grid_filled}, "
+                        f"grid_statuses={grid_statuses}, "
+                        f"filled_shares={trade.grid_filled_shares}, "
+                        f"filled_cost=${trade.grid_filled_cost:.2f}"
+                    )
                     if settings.PROGRESSIVE_STOP_LOSS and all_grid_filled:
                         new_stop_loss = round(trade.entry_price + settings.STOP_LOSS_OFFSET, 2)
                         old_stop_loss = trade.stop_loss_price
@@ -211,6 +237,14 @@ async def check_grid_fills_job():
                             trade.stop_loss_price = new_stop_loss
                             
                             # For live trades, place or update real sell order
+                            logger.info(
+                                f"[LIVE-DEBUG] 准备挂止损卖单: "
+                                f"trade_id={trade.id}, slug={trade.event_slug}, "
+                                f"executor_stub={executor.is_stub}, "
+                                f"token_id={'OK' if trade.token_id else 'MISSING'}, "
+                                f"stop_loss_price={trade.stop_loss_price:.3f}, "
+                                f"shares={trade.grid_filled_shares}"
+                            )
                             if not executor.is_stub:
                                 # Use stored token_id (persisted at trade creation)
                                 sell_token_id = trade.token_id
@@ -225,6 +259,13 @@ async def check_grid_fills_job():
                                         token_id=sell_token_id,
                                         price=trade.stop_loss_price,
                                         shares=trade.grid_filled_shares,
+                                    )
+                                    logger.info(
+                                        f"[LIVE-DEBUG] 止损卖单结果: "
+                                        f"trade_id={trade.id}, "
+                                        f"sell_order_id={sell_order_id or 'FAILED'}, "
+                                        f"price={trade.stop_loss_price:.3f}, "
+                                        f"shares={trade.grid_filled_shares}"
                                     )
                                     if sell_order_id:
                                         trade.stop_loss_order_id = sell_order_id
@@ -496,6 +537,14 @@ async def scan_and_trade_job():
                         executor = get_executor()
                         token_id = signal.market.up_token_id if signal.direction == "up" else signal.market.down_token_id
 
+                        logger.info(
+                            f"[LIVE-DEBUG] 创建实盘交易: "
+                            f"slug={signal.market.slug}, dir={signal.direction}, "
+                            f"executor_stub={executor.is_stub}, "
+                            f"token_id={'OK' if token_id else 'MISSING'}, "
+                            f"entry={entry_price:.3f}, trade_size=${trade_size:.2f}"
+                        )
+
                         live_trade = Trade(
                             market_ticker=signal.market.market_id,
                             platform="polymarket",
@@ -526,6 +575,16 @@ async def scan_and_trade_job():
                                     price=gl.limit_price,
                                     size=gl.cost,
                                 )
+                            else:
+                                logger.warning(
+                                    f"[LIVE-DEBUG] 网格买单跳过: token_id为空! "
+                                    f"slug={signal.market.slug}, L{gl.level} @ {gl.limit_price}"
+                                )
+                            logger.info(
+                                f"[LIVE-DEBUG] 网格L{gl.level}买单: "
+                                f"limit={gl.limit_price:.3f}, shares={gl.shares}, cost=${gl.cost:.2f}, "
+                                f"clob_order_id={clob_order_id or 'NONE'}"
+                            )
                             go = GridOrder(
                                 trade_id=live_trade.id,
                                 level=gl.level,
