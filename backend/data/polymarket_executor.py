@@ -156,23 +156,42 @@ class PolymarketExecutor:
             logger.info(f"[STUB] place_limit_sell: token={token_id[:8]}..., price={price}, shares={shares}")
             return f"STUB_SELL_{token_id[:8]}_{price}_{shares}"
 
-        try:
-            order_args = OrderArgs(
-                token_id=token_id,
-                price=price,
-                size=shares,
-                side="SELL",
-            )
-            signed_order = self._client.create_order(order_args)
-            resp = self._client.post_order(signed_order, OrderType.GTC)
+        # Retry with progressively smaller share amounts to handle
+        # precision mismatch between calculated shares and on-chain balance
+        attempt_shares = shares
+        while attempt_shares >= 0.01:
+            try:
+                order_args = OrderArgs(
+                    token_id=token_id,
+                    price=price,
+                    size=attempt_shares,
+                    side="SELL",
+                )
+                signed_order = self._client.create_order(order_args)
+                resp = self._client.post_order(signed_order, OrderType.GTC)
 
-            order_id = resp.get("orderID") or resp.get("id") or resp.get("order_id")
-            logger.info(f"[LIVE] limit sell placed: token={token_id[:8]}..., price={price}, shares={shares}, order_id={order_id}")
-            return str(order_id) if order_id else None
+                order_id = resp.get("orderID") or resp.get("id") or resp.get("order_id")
+                logger.info(
+                    f"[LIVE] limit sell placed: token={token_id[:8]}..., "
+                    f"price={price}, shares={attempt_shares}, order_id={order_id}"
+                )
+                return str(order_id) if order_id else None
 
-        except Exception as e:
-            logger.error(f"[LIVE] place_limit_sell failed: {e}")
-            return None
+            except Exception as e:
+                error_msg = str(e)
+                if "not enough balance" in error_msg and attempt_shares > 0.01:
+                    attempt_shares = round(attempt_shares - 0.01, 2)
+                    logger.warning(
+                        f"[LIVE] Retrying sell with fewer shares: "
+                        f"{round(attempt_shares + 0.01, 2)} -> {attempt_shares} "
+                        f"(on-chain balance < calculated)"
+                    )
+                    continue
+                logger.error(f"[LIVE] place_limit_sell failed: {e}")
+                return None
+
+        logger.error("[LIVE] place_limit_sell failed: shares reduced below 0.01")
+        return None
 
     def cancel_order(self, order_id: str) -> bool:
         """Cancel an open order. Returns True if cancelled."""
