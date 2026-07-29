@@ -32,7 +32,7 @@ _root_logger.setLevel(logging.INFO)
 _root_logger.addHandler(_stream_handler)
 _root_logger.addHandler(_file_handler)
 
-# Uvicorn log_config — clear uvicorn's default handlers, let it propagate to root
+# Uvicorn log_config — explicit root + uvicorn config so dictConfig preserves file logging
 UVICORN_LOG_CONFIG = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -43,11 +43,21 @@ UVICORN_LOG_CONFIG = {
         },
     },
     "handlers": {
-        "default": {
+        "stream": {
             "formatter": "default",
             "class": "logging.StreamHandler",
             "stream": "ext://sys.stdout",
         },
+        "file": {
+            "formatter": "default",
+            "class": "logging.FileHandler",
+            "filename": log_file,
+            "encoding": "utf-8",
+        },
+    },
+    "root": {
+        "handlers": ["stream", "file"],
+        "level": "INFO",
     },
     "loggers": {
         "uvicorn": {"level": "INFO", "propagate": True},
