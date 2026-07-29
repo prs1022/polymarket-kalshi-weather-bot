@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 BINANCE_API = "https://api.binance.com/api/v3"
-BINANCE_FAPI = "https://fapi1.binance.com/fapi/v1"  # Binance USDⓈ-M Futures (perpetual)
+BINANCE_FAPI = "https://fapi.binance.com/fapi/v1"  # Binance USDⓈ-M Futures (perpetual)
 BYBIT_API = "https://api.bybit.com/v5/market"
 COINBASE_API = "https://api.exchange.coinbase.com"
 KRAKEN_API = "https://api.kraken.com/0/public"
@@ -59,7 +59,22 @@ async def fetch_binance_klines(limit: int = 60) -> Optional[List[list]]:
 
     async with httpx.AsyncClient(timeout=10.0) as client:
 
-        # Priority 1: Coinbase (US-accessible, reliable spot)
+        # Priority 1: Binance USDⓈ-M Futures (perpetual) — best volume & price discovery
+        try:
+            resp = await client.get(
+                f"{BINANCE_FAPI}/klines",
+                params={"symbol": "BTCUSDT", "interval": "1m", "limit": limit},
+            )
+            resp.raise_for_status()
+            candles = resp.json()
+            _kline_cache["data"] = candles
+            _kline_cache["ts"] = now
+            _kline_cache["_source"] = "binance_futures"
+            return candles
+        except Exception as e:
+            logger.warning(f"Binance Futures kline fetch failed, trying Coinbase: {e}")
+
+        # Priority 2: Coinbase (US-accessible, reliable spot)
         try:
             import datetime as _dt
             end = _dt.datetime.now(_dt.timezone.utc)
@@ -86,23 +101,6 @@ async def fetch_binance_klines(limit: int = 60) -> Optional[List[list]]:
             return candles
         except Exception as e:
             logger.warning(f"Coinbase kline fetch failed, trying Kraken: {e}")
-
-        # # Priority 2: Binance USDⓈ-M Futures (perpetual) — best volume & price discovery
-        # ERROR: 418了
-        # try:
-        #     resp = await client.get(
-        #         f"{BINANCE_FAPI}/klines",
-        #         params={"symbol": "BTCUSDT", "interval": "1m", "limit": limit},
-        #     )
-        #     resp.raise_for_status()
-        #     candles = resp.json()
-        #     _kline_cache["data"] = candles
-        #     _kline_cache["ts"] = now
-        #     _kline_cache["_source"] = "binance_futures"
-        #     return candles
-        # except Exception as e:
-        #     logger.warning(f"Binance Futures kline fetch failed, trying Coinbase: {e}")
-
 
         # Priority 3: Kraken (US-accessible, free)
         try:
