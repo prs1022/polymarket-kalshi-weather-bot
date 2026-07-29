@@ -13,7 +13,11 @@ from backend.core.signals import scan_for_signals
 from backend.core.grid import generate_fibonacci_grid, check_grid_fills, update_trade_from_grid
 from backend.data.polymarket_executor import get_executor
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
 logger = logging.getLogger("trading_bot")
 
 # Global scheduler instance
