@@ -233,22 +233,22 @@ async def check_grid_fills_job():
                     total_filled += filled_count
                     total_cancelled += cancelled_count
 
-                    # 止损触发条件：所有网格订单都已终结（filled 或 cancelled），且至少有一个 filled
-                    # - 全部 filled = 市场大幅反向，挂止损保护
-                    # - 部分 filled + 部分 cancelled = 市场到期，对已成交部分挂止损
-                    # - 全部 cancelled = 无仓位，无需止损
-                    all_grid_resolved = all(o.status in ("filled", "cancelled") for o in all_grid)
-                    has_filled = any(o.status == "filled" for o in all_grid)
+                    # 止损触发条件：全部网格层都 filled（L0+L1都成交）
+                    # 策略逻辑：
+                    # - 只有 L0 成交 = 模型方向正确，安静等盘尾结算
+                    # - L0+L1 都成交 = 模型方向错误，市场大幅反向，挂保本止损单退出
+                    # - L0 成交 + L1 cancelled（市场到期未成交）= 不需要止损，等结算
+                    all_grid_filled = all(o.status == "filled" for o in all_grid)
                     grid_statuses = [(o.level, o.status) for o in all_grid]
                     logger.info(
                         f"[LIVE-DEBUG] 网格成交检查: trade_id={trade.id}, "
                         f"slug={trade.event_slug}, "
-                        f"all_resolved={all_grid_resolved}, has_filled={has_filled}, "
+                        f"all_filled={all_grid_filled}, "
                         f"grid_statuses={grid_statuses}, "
                         f"filled_shares={trade.grid_filled_shares}, "
                         f"filled_cost=${trade.grid_filled_cost:.2f}"
                     )
-                    if settings.PROGRESSIVE_STOP_LOSS and all_grid_resolved and has_filled:
+                    if settings.PROGRESSIVE_STOP_LOSS and all_grid_filled:
                         new_stop_loss = round(trade.entry_price + settings.STOP_LOSS_OFFSET, 2)
                         old_stop_loss = trade.stop_loss_price
                         
