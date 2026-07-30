@@ -95,6 +95,7 @@ async def check_grid_fills_job():
 
         total_filled = 0
         total_stop_loss = 0
+        total_cancelled = 0
 
         # Separate sim and live pending orders
         sim_pending = [o for o in pending if not o.clob_order_id]
@@ -180,7 +181,7 @@ async def check_grid_fills_job():
 
             for trade in trades:
                 trade_grid = [o for o in live_pending if o.trade_id == trade.id]
-                newly_filled = []
+                newly_resolved = []  # Orders that changed state (filled or cancelled)
 
                 for go in trade_grid:
                     if not go.clob_order_id:
@@ -197,42 +198,57 @@ async def check_grid_fills_job():
                         go.status = "filled"
                         go.fill_price = round(fill_info["price"], 2)
                         go.filled_at = datetime.utcnow()
-                        newly_filled.append(go)
+                        newly_resolved.append(go)
                         logger.info(f"[LIVE] Order {go.clob_order_id[:16]}... filled @ ${go.fill_price:.3f}")
                     else:
                         # Fallback: try individual order status check
                         # (in case trade is too recent to appear in trades list)
                         status_info = executor.get_order_status(go.clob_order_id)
+                        clob_status = status_info.get("status", "")
                         logger.info(
                             f"[LIVE-DEBUG] 网格L{go.level}状态查询: "
                             f"trade_id={trade.id}, order={go.clob_order_id[:16]}..., "
-                            f"limit={go.limit_price}, clob_status={status_info.get('status')}"
+                            f"limit={go.limit_price}, clob_status={clob_status}"
                         )
-                        if status_info["status"].lower() in ("matched", "filled"):
+                        if clob_status.lower() in ("matched", "filled"):
                             go.status = "filled"
                             go.fill_price = round(status_info["filled_price"], 2) if status_info["filled_price"] else go.limit_price
                             go.filled_at = datetime.utcnow()
-                            newly_filled.append(go)
+                            newly_resolved.append(go)
+                        elif clob_status == "not_found":
+                            # Order not found = market expired and Polymarket cancelled it
+                            go.status = "cancelled"
+                            go.filled_at = datetime.utcnow()
+                            newly_resolved.append(go)
+                            logger.warning(
+                                f"[LIVE] Order {go.clob_order_id[:16]}... not found → marked cancelled "
+                                f"(market likely expired), trade_id={trade.id}, L{go.level}"
+                            )
 
-                if newly_filled:
+                if newly_resolved:
                     all_grid = db.query(GridOrder).filter(GridOrder.trade_id == trade.id).all()
                     update_trade_from_grid(trade, all_grid)
-                    total_filled += len(newly_filled)
+                    filled_count = len([o for o in newly_resolved if o.status == "filled"])
+                    cancelled_count = len([o for o in newly_resolved if o.status == "cancelled"])
+                    total_filled += filled_count
+                    total_cancelled += cancelled_count
 
-                    # 止损仅在全部网格层成交后挂出
-                    # 策略：全部层成交 = 市场大幅反向，此时挂止损保护
-                    #        只有部分层成交 = 市场小幅波动，持有等待结算
-                    all_grid_filled = all(o.status == "filled" for o in all_grid)
+                    # 止损触发条件：所有网格订单都已终结（filled 或 cancelled），且至少有一个 filled
+                    # - 全部 filled = 市场大幅反向，挂止损保护
+                    # - 部分 filled + 部分 cancelled = 市场到期，对已成交部分挂止损
+                    # - 全部 cancelled = 无仓位，无需止损
+                    all_grid_resolved = all(o.status in ("filled", "cancelled") for o in all_grid)
+                    has_filled = any(o.status == "filled" for o in all_grid)
                     grid_statuses = [(o.level, o.status) for o in all_grid]
                     logger.info(
                         f"[LIVE-DEBUG] 网格成交检查: trade_id={trade.id}, "
                         f"slug={trade.event_slug}, "
-                        f"all_filled={all_grid_filled}, "
+                        f"all_resolved={all_grid_resolved}, has_filled={has_filled}, "
                         f"grid_statuses={grid_statuses}, "
                         f"filled_shares={trade.grid_filled_shares}, "
                         f"filled_cost=${trade.grid_filled_cost:.2f}"
                     )
-                    if settings.PROGRESSIVE_STOP_LOSS and all_grid_filled:
+                    if settings.PROGRESSIVE_STOP_LOSS and all_grid_resolved and has_filled:
                         new_stop_loss = round(trade.entry_price + settings.STOP_LOSS_OFFSET, 2)
                         old_stop_loss = trade.stop_loss_price
                         
@@ -297,8 +313,8 @@ async def check_grid_fills_job():
                                 )
 
                     log_event("data",
-                        f"【实盘】Grid fill: {trade.event_slug} {trade.direction.upper()} "
-                        f"{len(newly_filled)} orders filled | "
+                        f"【实盘】Grid update: {trade.event_slug} {trade.direction.upper()} "
+                        f"{filled_count} filled, {len(newly_resolved) - filled_count} cancelled | "
                         f"avg entry {trade.entry_price:.3f}, {trade.grid_filled_shares:.0f} shares, ${trade.grid_filled_cost:.2f}"
                     )
 
@@ -357,10 +373,12 @@ async def check_grid_fills_job():
                     f"break-even exit, {trade.grid_filled_shares:.0f} shares"
                 )
 
-        if total_filled > 0 or total_stop_loss > 0:
+        if total_filled > 0 or total_stop_loss > 0 or total_cancelled > 0:
             db.commit()
             if total_filled > 0:
                 log_event("info", f"Grid fills: {total_filled} orders filled")
+            if total_cancelled > 0:
+                log_event("info", f"Grid cancelled: {total_cancelled} orders expired (market closed)")
             if total_stop_loss > 0:
                 log_event("info", f"Stop-loss fills: {total_stop_loss} trades exited at break-even")
 
