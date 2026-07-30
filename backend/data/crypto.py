@@ -60,7 +60,32 @@ async def fetch_binance_klines(limit: int = 60) -> Optional[List[list]]:
     async with httpx.AsyncClient(timeout=10.0) as client:
 
         # Priority 1: Binance USDⓈ-M Futures (perpetual) — best volume & price discovery
-     .55
+        try:
+            resp = await client.get(
+                f"{BINANCE_FAPI}/klines",
+                params={"symbol": "BTCUSDT", "interval": "1m", "limit": limit},
+            )
+            resp.raise_for_status()
+            candles = resp.json()
+            _kline_cache["data"] = candles
+            _kline_cache["ts"] = now
+            _kline_cache["_source"] = "binance_futures"
+            return candles
+        except Exception as e:
+            logger.warning(f"Binance Futures kline fetch failed, trying Coinbase: {e}")
+
+        # Priority 2: Coinbase (US-accessible, reliable spot)
+        try:
+            import datetime as _dt
+            end = _dt.datetime.now(_dt.timezone.utc)
+            start = end - _dt.timedelta(minutes=limit)
+            resp = await client.get(
+                f"{COINBASE_API}/products/BTC-USD/candles",
+                params={
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "granularity": 60,
+                },
             )
             resp.raise_for_status()
             rows = resp.json()
