@@ -44,7 +44,7 @@ export function StatsCards({ stats, liveStats, liveEnabled }: Props) {
       <motion.div className="flex items-center gap-1.5" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.05 }}>
         <span className="text-[10px] text-neutral-600 uppercase">P&L</span>
         <span className={`text-sm font-semibold tabular-nums ${displayStats.total_pnl >= 0 ? 'text-green-500 glow-green' : 'text-red-500 glow-red'}`}>
-          {displayStats.total_pnl >= 0 ? '+' : ''}${Math.abs(displayStats.total_pnl).toFixed(0)}
+          {displayStats.total_pnl >= 0 ? '+' : ''}${Math.abs(displayStats.total_pnl).toFixed(2)}
         </span>
         <span className={`text-[10px] tabular-nums ${returnPercent >= 0 ? 'text-green-500/60' : 'text-red-500/60'}`}>
           {returnPercent >= 0 ? '+' : ''}{returnPercent.toFixed(1)}%

@@ -151,7 +151,7 @@ export function TradesTable({ trades }: Props) {
                   </span>
                 </td>
                 <td className="py-1 px-1.5 text-right text-neutral-300 tabular-nums">
-                  ${trade.size.toFixed(0)}
+                  ${trade.size.toFixed(2)}
                 </td>
                 <td className="py-1 px-1.5 text-right text-neutral-400 tabular-nums text-[10px]">
                   {trade.shares ? trade.shares.toFixed(1) : '-'}
@@ -161,7 +161,7 @@ export function TradesTable({ trades }: Props) {
                     <span className={`font-semibold tabular-nums ${
                       trade.pnl >= 0 ? 'text-green-500' : 'text-red-500'
                     }`}>
-                      {trade.pnl >= 0 ? '+' : ''}${trade.pnl.toFixed(0)}
+                      {trade.pnl >= 0 ? '+' : ''}${trade.pnl.toFixed(2)}
                     </span>
                   ) : (
                     <span className="text-neutral-600">-</span>
