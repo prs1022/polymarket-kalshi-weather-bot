@@ -7,8 +7,8 @@ import { platformStyles } from '../utils'
 interface Props {
   signals: Signal[]
   weatherSignals: WeatherSignal[]
-  onSimulateTrade: (ticker: string) => void
-  isSimulating: boolean
+  onSimulateTrade?: (ticker: string) => void
+  isSimulating?: boolean
 }
 
 type SortKey = 'edge' | 'model_probability' | 'suggested_size'
@@ -58,6 +58,7 @@ function EdgeBar({ edge }: { edge: number }) {
 }
 
 export function SignalsTable({ signals, weatherSignals, onSimulateTrade, isSimulating }: Props) {
+  const canSimulate = !!onSimulateTrade
   const [sortKey, setSortKey] = useState<SortKey>('edge')
   const [sortDir, setSortDir] = useState<SortDir>('desc')
   const [expandedKey, setExpandedKey] = useState<string | null>(null)
@@ -226,9 +227,9 @@ export function SignalsTable({ signals, weatherSignals, onSimulateTrade, isSimul
                   {sig.suggestedSize > 0 ? `$${sig.suggestedSize.toFixed(0)}` : '-'}
                 </td>
                 <td className="py-1 px-1.5 text-right">
-                  {sig.actionable && sig.category === 'BTC' && (
+                  {canSimulate && sig.actionable && sig.category === 'BTC' && (
                     <button
-                      onClick={(e) => { e.stopPropagation(); onSimulateTrade(sig.ticker) }}
+                      onClick={(e) => { e.stopPropagation(); onSimulateTrade!(sig.ticker) }}
                       disabled={isSimulating}
                       className="px-1.5 py-0.5 text-[8px] font-medium uppercase bg-amber-500/10 text-amber-400 border border-amber-500/20 hover:bg-amber-500/20 disabled:opacity-50"
                     >

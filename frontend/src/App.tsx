@@ -1,7 +1,7 @@
 import { useState, useEffect, Suspense, lazy } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { motion } from 'framer-motion'
-import { fetchDashboard, runScan, simulateTrade, startBot, stopBot } from './api'
+import { fetchDashboard } from './api'
 import { StatsCards } from './components/StatsCards'
 import { SignalsTable } from './components/SignalsTable'
 import { TradesTable } from './components/TradesTable'
@@ -74,7 +74,6 @@ function RefreshBar({ interval }: { interval: number }) {
 }
 
 function App() {
-  const queryClient = useQueryClient()
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['dashboard'],
@@ -82,35 +81,16 @@ function App() {
     refetchInterval: 5000,
   })
 
-  const scanMutation = useMutation({
-    mutationFn: runScan,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
-  })
-
-  const tradeMutation = useMutation({
-    mutationFn: simulateTrade,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
-  })
-
-  const startMutation = useMutation({
-    mutationFn: startBot,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
-  })
-
-  const stopMutation = useMutation({
-    mutationFn: stopBot,
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['dashboard'] }),
-  })
-
   const activeSignals = data?.active_signals ?? []
-  const recentTrades = data?.recent_trades ?? []
+  const recentTrades = (data?.recent_trades ?? []).filter(t => t.is_live)
   const btcPrice = data?.btc_price
   const micro = data?.microstructure
   const windows = data?.windows ?? []
   const weatherSignals = data?.weather_signals ?? []
   const weatherForecasts = data?.weather_forecasts ?? []
 
-  const stats = data?.stats ?? {
+  // Use LIVE stats as primary; fall back to sim stats
+  const simStats = data?.stats ?? {
     is_running: false,
     last_run: null,
     total_trades: 0,
@@ -119,6 +99,7 @@ function App() {
     winning_trades: 0,
     win_rate: 0
   }
+  const stats = data?.live_stats ?? simStats
   const equityCurve = data?.equity_curve ?? []
   const calibration = data?.calibration ?? null
 
@@ -175,9 +156,6 @@ function App() {
           }`}>
             {stats.is_running ? 'Live' : 'Idle'}
           </span>
-          <span className="px-1.5 py-0.5 text-[9px] font-bold uppercase bg-amber-500/10 text-amber-400 border border-amber-500/20">
-            Sim
-          </span>
         </div>
 
         {btcPrice && (
@@ -194,20 +172,12 @@ function App() {
         <div className="flex-1" />
 
         <StatsCards
-          stats={stats}
+          stats={simStats}
           liveStats={data?.live_stats}
           liveEnabled={data?.live_enabled}
-          onToggleLive={() => queryClient.invalidateQueries({ queryKey: ['dashboard'] })}
         />
 
         <div className="flex items-center gap-2 shrink-0">
-          <button
-            onClick={() => scanMutation.mutate()}
-            disabled={scanMutation.isPending}
-            className="px-2.5 py-1 bg-neutral-900 border border-neutral-700 hover:border-neutral-600 text-neutral-300 text-[10px] uppercase tracking-wider transition-colors disabled:opacity-50 whitespace-nowrap"
-          >
-            {scanMutation.isPending ? 'Scanning...' : 'Scan'}
-          </button>
           <LiveClock />
         </div>
       </motion.header>
@@ -266,9 +236,6 @@ function App() {
               isRunning={stats.is_running}
               lastRun={stats.last_run}
               stats={{ total_trades: stats.total_trades, total_pnl: stats.total_pnl }}
-              onStart={() => startMutation.mutate()}
-              onStop={() => stopMutation.mutate()}
-              onScan={() => scanMutation.mutate()}
             />
           </div>
         </div>
@@ -355,8 +322,6 @@ function App() {
               <SignalsTable
                 signals={activeSignals}
                 weatherSignals={weatherSignals}
-                onSimulateTrade={(ticker) => tradeMutation.mutate(ticker)}
-                isSimulating={tradeMutation.isPending}
               />
             </div>
           </div>
