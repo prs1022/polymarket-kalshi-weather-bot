@@ -275,8 +275,22 @@ async def settle_pending_trades(db: Session) -> List[Trade]:
                 trade.settlement_time = datetime.utcnow()
 
                 if getattr(trade, 'stop_loss_filled', False):
-                    # Stop-loss exited at break-even
-                    trade.result = "stop_loss"
+                    # Stop-loss exited at break-even — check if model direction was correct
+                    direction = trade.direction
+                    if direction == "up":
+                        model_correct = (settlement_value == 1.0)
+                    elif direction == "down":
+                        model_correct = (settlement_value == 0.0)
+                    else:  # yes/no
+                        model_correct = (direction == "yes" and settlement_value == 1.0) or \
+                                        (direction == "no" and settlement_value == 0.0)
+                    
+                    if model_correct:
+                        # Direction right, but stop-loss hit due to volatility
+                        trade.result = "stop_loss"
+                    else:
+                        # Direction wrong — this is a real loss (stop-loss saved us from bigger loss)
+                        trade.result = "loss"
                 elif pnl is not None and pnl > 0:
                     trade.result = "win"
                 elif pnl is not None and pnl < 0:
