@@ -669,11 +669,17 @@ def _compute_calibration_summary(db: Session) -> Optional[CalibrationSummary]:
 
     # Brier score: mean squared error of probability forecasts
     # For each signal: (predicted_prob - actual_outcome)^2
+    # When INVERT_SIGNAL is on, the effective forecast is 1 - model_probability
+    # because we trade against the anti-predictive model.
     brier_sum = 0.0
     for s in settled_signals:
-        # Model probability is for UP; actual is 1.0 if UP won, 0.0 if DOWN won
+        # model_probability is always P(up) from the raw model
         actual = s.settlement_value if s.settlement_value is not None else 0.5
-        brier_sum += (s.model_probability - actual) ** 2
+        if settings.INVERT_SIGNAL:
+            effective_prob = 1.0 - s.model_probability
+        else:
+            effective_prob = s.model_probability
+        brier_sum += (effective_prob - actual) ** 2
     brier_score = brier_sum / total_with_outcome
 
     return CalibrationSummary(
