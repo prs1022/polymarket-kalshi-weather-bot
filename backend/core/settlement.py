@@ -259,10 +259,10 @@ async def settle_pending_trades(db: Session) -> List[Trade]:
         return []
 
     if not pending:
-        logger.info("No pending trades to settle")
+        logger.debug("No pending trades to settle")
         return []
 
-    logger.info(f"Checking {len(pending)} pending trades for settlement...")
+    logger.debug(f"Checking {len(pending)} pending trades for settlement...")
     settled_trades = []
 
     for trade in pending:
@@ -331,7 +331,7 @@ async def settle_pending_trades(db: Session) -> List[Trade]:
             db.rollback()
             return []
     else:
-        logger.info("No trades ready for settlement (markets still open)")
+        logger.debug("No trades ready for settlement (markets still open)")
 
     return settled_trades
 

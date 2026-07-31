@@ -151,7 +151,7 @@ async def scan_for_weather_signals() -> List[WeatherTradingSignal]:
     city_keys = [c.strip() for c in settings.WEATHER_CITIES.split(",") if c.strip()]
 
     logger.info("=" * 50)
-    logger.info("WEATHER SCAN: Fetching temperature markets...")
+    logger.debug("WEATHER SCAN: Fetching temperature markets...")
 
     markets = []
 
@@ -189,7 +189,7 @@ async def scan_for_weather_signals() -> List[WeatherTradingSignal]:
     signals.sort(key=lambda s: abs(s.edge), reverse=True)
 
     actionable = [s for s in signals if s.passes_threshold]
-    logger.info(f"WEATHER SCAN COMPLETE: {len(signals)} signals, {len(actionable)} actionable")
+    logger.debug(f"WEATHER SCAN COMPLETE: {len(signals)} signals, {len(actionable)} actionable")
 
     for signal in actionable[:5]:
         logger.info(f"  {signal.market.city_name}: {signal.market.metric} {signal.market.direction} "

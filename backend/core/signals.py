@@ -340,8 +340,7 @@ async def scan_for_signals() -> List[TradingSignal]:
     """
     signals = []
 
-    logger.info("=" * 50)
-    logger.info("BTC 5-MIN SCAN: Fetching markets from Polymarket...")
+    logger.debug("BTC 5-MIN SCAN: Fetching markets from Polymarket...")
 
     try:
         markets = await fetch_active_btc_markets()
@@ -349,7 +348,7 @@ async def scan_for_signals() -> List[TradingSignal]:
         logger.error(f"Failed to fetch BTC markets: {e}")
         markets = []
 
-    logger.info(f"Found {len(markets)} active BTC 5-min markets")
+    logger.debug(f"Found {len(markets)} active BTC 5-min markets")
 
     for market in markets:
         try:
@@ -367,12 +366,10 @@ async def scan_for_signals() -> List[TradingSignal]:
     signals.sort(key=lambda s: abs(s.edge), reverse=True)
 
     actionable = [s for s in signals if s.passes_threshold]
-    logger.info(f"=" * 50)
-    logger.info(f"SCAN COMPLETE: {len(signals)} signals, {len(actionable)} actionable")
+    logger.debug(f"SCAN COMPLETE: {len(signals)} signals, {len(actionable)} actionable")
 
     for signal in actionable[:5]:
-        logger.info(f"  {signal.market.slug}")
-        logger.info(f"    Edge: {signal.edge:+.1%} -> {signal.direction.upper()} @ ${signal.suggested_size:.2f}")
+        logger.debug(f"  {signal.market.slug} Edge: {signal.edge:+.1%} -> {signal.direction.upper()} @ ${signal.suggested_size:.2f}")
 
     # Persist signals with non-zero edge to DB for calibration tracking
     _persist_signals(signals)

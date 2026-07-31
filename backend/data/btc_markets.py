@@ -292,7 +292,7 @@ async def fetch_active_btc_markets() -> List[BtcMarket]:
         # Filter out already-closed markets
         markets = [m for m in markets if not m.closed]
 
-        logger.info(f"Fetched {len(markets)} active BTC 5-min markets")
+        logger.debug(f"Fetched {len(markets)} active BTC 5-min markets")
 
         # Update cache
         _markets_cache["data"] = markets

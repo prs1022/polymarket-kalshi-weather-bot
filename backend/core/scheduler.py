@@ -18,6 +18,9 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
+# Silence noisy third-party loggers
+for _name in ("httpx", "apscheduler", "uvicorn.access"):
+    logging.getLogger(_name).setLevel(logging.WARNING)
 logger = logging.getLogger("trading_bot")
 
 # Global scheduler instance
@@ -157,7 +160,7 @@ async def check_grid_fills_job():
             trade_ids = set(o.trade_id for o in live_pending)
             trades = db.query(Trade).filter(Trade.id.in_(trade_ids)).all()
 
-            logger.info(
+            logger.debug(
                 f"[LIVE-DEBUG] Phase 1b: 检查 {len(live_pending)} 个挂单, "
                 f"涉及 {len(trades)} 笔交易, "
                 f"executor_stub={executor.is_stub}, "
@@ -205,7 +208,7 @@ async def check_grid_fills_job():
                         # (in case trade is too recent to appear in trades list)
                         status_info = executor.get_order_status(go.clob_order_id)
                         clob_status = status_info.get("status", "")
-                        logger.info(
+                        logger.debug(
                             f"[LIVE-DEBUG] 网格L{go.level}状态查询: "
                             f"trade_id={trade.id}, order={go.clob_order_id[:16]}..., "
                             f"limit={go.limit_price}, clob_status={clob_status}"
@@ -376,11 +379,11 @@ async def check_grid_fills_job():
         if total_filled > 0 or total_stop_loss > 0 or total_cancelled > 0:
             db.commit()
             if total_filled > 0:
-                log_event("info", f"Grid fills: {total_filled} orders filled")
+                logger.info(f"Grid fills: {total_filled} orders filled")
             if total_cancelled > 0:
-                log_event("info", f"Grid cancelled: {total_cancelled} orders expired (market closed)")
+                logger.info(f"Grid cancelled: {total_cancelled} orders expired (market closed)")
             if total_stop_loss > 0:
-                log_event("info", f"Stop-loss fills: {total_stop_loss} trades exited at break-even")
+                logger.info(f"Stop-loss fills: {total_stop_loss} trades exited at break-even")
 
     except Exception as e:
         logger.warning(f"Grid fill check error: {e}")
@@ -394,7 +397,7 @@ async def scan_and_trade_job():
     Runs every minute.
     Also checks pending grid orders for fills on each scan.
     """
-    log_event("info", "Scanning BTC 5-min markets...")
+    logger.debug("Scanning BTC 5-min markets...")
 
     try:
         # --- Check pending grid orders for fills ---
@@ -409,7 +412,7 @@ async def scan_and_trade_job():
         })
 
         if not actionable:
-            log_event("info", "No actionable BTC signals")
+            logger.debug("No actionable BTC signals")
             return
 
         db = SessionLocal()
@@ -418,7 +421,7 @@ async def scan_and_trade_job():
             live_state = get_bot_state(db, is_live=True) if settings.LIVE_TRADING_ENABLED else None
 
             if not sim_state.is_running:
-                log_event("info", "Bot is paused, skipping trades")
+                logger.debug("Bot is paused, skipping trades")
                 return
 
             MAX_TRADES_PER_SCAN = 2
@@ -444,7 +447,7 @@ async def scan_and_trade_job():
                 Trade.is_live == False
             ).count()
             if total_pending >= MAX_TOTAL_PENDING:
-                log_event("info", f"Max pending trades reached ({total_pending}/{MAX_TOTAL_PENDING})")
+                logger.debug(f"Max pending trades reached ({total_pending}/{MAX_TOTAL_PENDING})")
                 return
 
             trades_executed = 0
@@ -632,7 +635,7 @@ async def scan_and_trade_job():
             if trades_executed > 0:
                 log_event("success", f"Executed {trades_executed} BTC trade(s)")
             else:
-                log_event("info", "No new trades executed")
+                logger.debug("No new trades executed")
 
         finally:
             db.close()
@@ -647,7 +650,7 @@ async def weather_scan_and_trade_job():
     Background job: Scan weather temperature markets, generate signals, execute trades.
     Runs every 5 minutes when WEATHER_ENABLED.
     """
-    log_event("info", "Scanning weather temperature markets...")
+    logger.debug("Scanning weather temperature markets...")
 
     try:
         from backend.core.weather_signals import scan_for_weather_signals
@@ -655,13 +658,10 @@ async def weather_scan_and_trade_job():
         signals = await scan_for_weather_signals()
         actionable = [s for s in signals if s.passes_threshold]
 
-        log_event("data", f"Weather: {len(signals)} signals, {len(actionable)} actionable", {
-            "total_signals": len(signals),
-            "actionable": len(actionable),
-        })
+        logger.debug(f"Weather: {len(signals)} signals, {len(actionable)} actionable")
 
         if not actionable:
-            log_event("info", "No actionable weather signals")
+            logger.debug("No actionable weather signals")
             return
 
         db = SessionLocal()
@@ -669,7 +669,7 @@ async def weather_scan_and_trade_job():
             state = get_bot_state(db, is_live=False)
 
             if not state.is_running:
-                log_event("info", "Bot is paused, skipping weather trades")
+                logger.debug("Bot is paused, skipping weather trades")
                 return
 
             MAX_TRADES_PER_SCAN = 3
@@ -684,7 +684,7 @@ async def weather_scan_and_trade_job():
             ).scalar()
 
             if weather_pending >= MAX_WEATHER_ALLOCATION:
-                log_event("info", f"Weather allocation limit reached: ${weather_pending:.0f}/${MAX_WEATHER_ALLOCATION:.0f}")
+                logger.info(f"Weather allocation limit reached: ${weather_pending:.0f}/${MAX_WEATHER_ALLOCATION:.0f}")
                 return
 
             trades_executed = 0
@@ -762,7 +762,7 @@ async def weather_scan_and_trade_job():
             if trades_executed > 0:
                 log_event("success", f"Executed {trades_executed} weather trade(s)")
             else:
-                log_event("info", "No new weather trades executed")
+                logger.debug("No new weather trades executed")
 
         finally:
             db.close()
@@ -777,7 +777,7 @@ async def settlement_job():
     Background job: Check and settle pending trades.
     Runs every 2 minutes (BTC 5-min markets resolve fast).
     """
-    log_event("info", "Checking BTC trade settlements...")
+    logger.debug("Checking BTC trade settlements...")
 
     try:
         from backend.core.settlement import settle_pending_trades, update_bot_state_with_settlements
@@ -787,7 +787,7 @@ async def settlement_job():
             pending_count = db.query(Trade).filter(Trade.settled == False).count()
 
             if pending_count == 0:
-                log_event("data", "No pending trades to settle")
+                logger.debug("No pending trades to settle")
                 return
 
             log_event("data", f"Processing {pending_count} pending trades")
@@ -812,7 +812,7 @@ async def settlement_job():
                     result_prefix = "+" if trade.pnl and trade.pnl > 0 else ""
                     log_event("data", f"  {trade.event_slug}: {trade.result.upper()} {result_prefix}${trade.pnl:.2f}")
             else:
-                log_event("info", "No trades ready for settlement")
+                logger.debug("No trades ready for settlement")
 
         finally:
             db.close()
