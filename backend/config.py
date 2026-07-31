@@ -40,7 +40,7 @@ class Settings(BaseSettings):
 
     # ==================== 机器人基础配置 ====================
     SIMULATION_MODE: bool = False  # 模拟模式（True=模拟盘，False=实盘）
-    INITIAL_BANKROLL: float = 60.0  # 初始资金（美元） - 余额翻倍后调整
+    INITIAL_BANKROLL: float = 30.0  # 初始资金（美元）
     KELLY_FRACTION: float = 0.10  # Kelly仓位系数（0.10=10%凯利公式，更保守）
 
     # ==================== BTC 5分钟市场配置 ====================
@@ -51,14 +51,14 @@ class Settings(BaseSettings):
     MIN_ENTRY_PRICE: float = 0.51  # 最低入场价格（40美分） - 低于此价格不买入
     MAX_ENTRY_PRICE: float = 0.55  # 最高入场价格（55美分） - 高于此价格不买入
     MAX_TRADES_PER_WINDOW: int = 1  # 每个时间窗口最多交易数
-    MAX_TOTAL_PENDING_TRADES: int = 10  # 最大待结算单数（余额翻倍后调整）
+    MAX_TOTAL_PENDING_TRADES: int = 5  # 最大待结算单数
     GRID_LEVELS: int = 2  # 网格订单层数（2层=2个挂单，全部成交后才挂止损）
     GRID_MODE: str = "equal"  # 网格模式（"equal"=等间距均分，"fibonacci"=斐波那契间距）
     GRID_LOWER_BOUND: float = 0.20  # 网格下限价格（20美分）- 固定值，从当前价均分到30¢
 
     # ==================== 风险管理配置 ====================
-    DAILY_LOSS_LIMIT: float = 30.0  # 每日最大亏损（美元） - 余额翻倍后调整
-    MAX_TRADE_SIZE: float = 4.0  # 单笔最大交易额（美元） - 余额翻倍后调整
+    DAILY_LOSS_LIMIT: float = 15.0  # 每日最大亏损（美元）
+    MAX_TRADE_SIZE: float = 4.0  # 单笔最大交易额（美元）
     MIN_TIME_REMAINING: int = 480  # 最少剩余时间（秒） - 距离结算<480秒不交易
     MAX_TIME_REMAINING: int = 600  # 最多剩余时间（秒） - 只交易当前和下个5分钟窗口
     

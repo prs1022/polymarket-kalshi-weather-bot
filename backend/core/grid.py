@@ -15,7 +15,7 @@ from backend.config import settings
 
 logger = logging.getLogger("trading_bot")
 
-MIN_SHARES = 10  # Polymarket minimum shares per grid level (doubled for larger bankroll)
+MIN_SHARES = 5  # Polymarket minimum shares per grid level
 
 
 def _get_extreme_price() -> float:
