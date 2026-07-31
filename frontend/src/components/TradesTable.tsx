@@ -113,6 +113,7 @@ export function TradesTable({ trades }: Props) {
             const isPending = trade.result === 'pending'
             const isWin = trade.result === 'win'
             const isStopLoss = trade.result === 'stop_loss'
+            const isNoFill = trade.result === 'no_fill'
             const isUp = trade.direction === 'up'
             const style = platformStyles[trade.platform?.toLowerCase()]
 
@@ -133,9 +134,9 @@ export function TradesTable({ trades }: Props) {
                 </td>
                 <td className="py-1 px-1.5">
                   <span className={`text-[9px] font-medium uppercase ${
-                    isPending ? 'text-amber-500' : isWin ? 'text-green-500' : isStopLoss ? 'text-blue-500' : 'text-red-500'
+                    isPending ? 'text-amber-500' : isWin ? 'text-green-500' : isStopLoss ? 'text-blue-500' : isNoFill ? 'text-neutral-500' : 'text-red-500'
                   }`}>
-                    {isPending ? 'PND' : isWin ? 'WIN' : isStopLoss ? 'SL' : 'LOSS'}
+                    {isPending ? 'PND' : isWin ? 'WIN' : isStopLoss ? 'SL' : isNoFill ? 'SKIP' : 'LOSS'}
                   </span>
                   {trade.is_live && (
                     <span className="ml-0.5 text-[8px] font-bold uppercase text-orange-400">●</span>

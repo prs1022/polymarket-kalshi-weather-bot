@@ -172,6 +172,12 @@ async def check_market_settlement(trade: Trade) -> Tuple[bool, Optional[float], 
     if not is_resolved or settlement_value is None:
         return False, None, None
 
+    # If no grid shares were actually filled, no real position was taken
+    grid_filled_shares = getattr(trade, 'grid_filled_shares', None) or 0
+    if trade.is_live and grid_filled_shares == 0:
+        logger.info(f"Trade {trade.id} settled with NO FILLS (grid orders never filled) — P&L: $0.00")
+        return True, settlement_value, 0.0
+
     # If stop-loss was filled, we exited at break-even before settlement
     if getattr(trade, 'stop_loss_filled', False):
         pnl = 0.0
@@ -291,6 +297,9 @@ async def settle_pending_trades(db: Session) -> List[Trade]:
                     else:
                         # Direction wrong — this is a real loss (stop-loss saved us from bigger loss)
                         trade.result = "loss"
+                elif trade.is_live and (getattr(trade, 'grid_filled_shares', None) or 0) == 0:
+                    # Grid orders never filled — no real position was taken
+                    trade.result = "no_fill"
                 elif pnl is not None and pnl > 0:
                     trade.result = "win"
                 elif pnl is not None and pnl < 0:

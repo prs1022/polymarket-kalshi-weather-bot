@@ -58,7 +58,7 @@ class Settings(BaseSettings):
 
     # ==================== 风险管理配置 ====================
     DAILY_LOSS_LIMIT: float = 15.0  # 每日最大亏损（美元）
-    MAX_TRADE_SIZE: float = 4.0  # 单笔最大交易额（美元）
+    MAX_TRADE_SIZE: float = 2.0  # 单笔最大交易额（美元）
     MIN_TIME_REMAINING: int = 480  # 最少剩余时间（秒） - 距离结算<480秒不交易
     MAX_TIME_REMAINING: int = 600  # 最多剩余时间（秒） - 只交易当前和下个5分钟窗口
     
