@@ -100,6 +100,7 @@ class BotState(Base):
     total_pnl = Column(Float, default=0.0)
     last_run = Column(DateTime, nullable=True)
     is_running = Column(Boolean, default=False)
+    stop_loss_patience = Column(Integer, default=5)  # 动态止损耐心值（0-10美分）
 
 
 class Signal(Base):
@@ -261,6 +262,15 @@ def ensure_schema():
             with engine.connect() as conn:
                 with conn.begin():
                     conn.execute(text("ALTER TABLE bot_state ADD COLUMN is_live BOOLEAN DEFAULT 0"))
+        except Exception:
+            pass
+
+    # Add stop_loss_patience column to bot_state table
+    if state_columns and "stop_loss_patience" not in state_columns:
+        try:
+            with engine.connect() as conn:
+                with conn.begin():
+                    conn.execute(text("ALTER TABLE bot_state ADD COLUMN stop_loss_patience INTEGER DEFAULT 5"))
         except Exception:
             pass
 

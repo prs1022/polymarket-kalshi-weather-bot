@@ -7,6 +7,7 @@ from typing import Optional, List, Tuple
 from sqlalchemy.orm import Session
 
 from backend.models.database import Trade, BotState, Signal, get_bot_state
+from backend.config import settings
 
 logger = logging.getLogger("trading_bot")
 
@@ -361,12 +362,45 @@ async def update_bot_state_with_settlements(db: Session, settled_trades: List[Tr
         # Update live state
         if live_trades:
             live_state = get_bot_state(db, is_live=True)
+            old_patience = getattr(live_state, 'stop_loss_patience', None)
+            if old_patience is None:
+                old_patience = settings.STOP_LOSS_PATIENCE_INITIAL
+            patience_changed = False
+
             for trade in live_trades:
                 if trade.pnl is not None:
                     live_state.total_pnl += trade.pnl
                     live_state.bankroll += trade.pnl
                     if trade.result == "win":
                         live_state.winning_trades += 1
+
+                # 动态止损耐心值更新：
+                # - 止损成交（成功）→ patience +1（止损价更高，更容易成交）
+                # - 止损未成交但挂过止损单（失败）→ patience -1（止损价更低，更容易成交）
+                if getattr(trade, 'stop_loss_filled', False):
+                    # 止损成功成交
+                    new_patience = min(settings.STOP_LOSS_PATIENCE_MAX, old_patience + 1)
+                    if new_patience != old_patience:
+                        logger.info(
+                            f"[PATIENCE] 止损成功 → patience {old_patience}→{new_patience} "
+                            f"(trade {trade.id}, {trade.event_slug})"
+                        )
+                        old_patience = new_patience
+                        patience_changed = True
+                elif getattr(trade, 'stop_loss_price', None) is not None and trade.is_live:
+                    # 挂过止损但未成交 = 止损失败
+                    new_patience = max(settings.STOP_LOSS_PATIENCE_MIN, old_patience - 1)
+                    if new_patience != old_patience:
+                        logger.info(
+                            f"[PATIENCE] 止损失败 → patience {old_patience}→{new_patience} "
+                            f"(trade {trade.id}, {trade.event_slug})"
+                        )
+                        old_patience = new_patience
+                        patience_changed = True
+
+            if patience_changed:
+                live_state.stop_loss_patience = old_patience
+                logger.info(f"[PATIENCE] 当前耐心值: {old_patience}¢ (止损卖价 = 网格均价 + {old_patience}¢)")
 
         db.commit()
 

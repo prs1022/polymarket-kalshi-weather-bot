@@ -65,6 +65,11 @@ class Settings(BaseSettings):
     # 止损配置
     PROGRESSIVE_STOP_LOSS: bool = True  # 渐进式止损（每成交一层更新止损价）
     STOP_LOSS_OFFSET: float = 0.05  # 止损加价（美元，5美分覆盖手续费）
+    # 动态止损耐心值（美分）：止损卖价 = 网格均价 + patience/100
+    # 止损失败 -1，止损成功 +1，范围 [0, 10]，初始 5
+    STOP_LOSS_PATIENCE_INITIAL: int = 5  # 初始耐心值（5美分）
+    STOP_LOSS_PATIENCE_MIN: int = 0  # 最小耐心值（0 = 网格均价挂卖单）
+    STOP_LOSS_PATIENCE_MAX: int = 10  # 最大耐心值（10美分）
 
     # ==================== 信号模型参数 ====================
     # 模型使用市场价格作为基准，然后根据指标综合得分调整

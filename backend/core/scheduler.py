@@ -129,7 +129,14 @@ async def check_grid_fills_job():
                     #        只有部分层成交 = 市场小幅波动，持有等待结算
                     all_grid_filled = all(o.status == "filled" for o in all_grid)
                     if settings.PROGRESSIVE_STOP_LOSS and all_grid_filled:
-                        new_stop_loss = round(trade.entry_price + settings.STOP_LOSS_OFFSET, 2)
+                        # 动态止损：从 BotState 读取 patience 值（美分）
+                        live_state = get_bot_state(db, is_live=True)
+                        patience = getattr(live_state, 'stop_loss_patience', None)
+                        if patience is None:
+                            patience = settings.STOP_LOSS_PATIENCE_INITIAL
+                        patience = max(settings.STOP_LOSS_PATIENCE_MIN, min(settings.STOP_LOSS_PATIENCE_MAX, patience))
+                        stop_loss_offset = patience / 100.0
+                        new_stop_loss = round(trade.entry_price + stop_loss_offset, 2)
                         old_stop_loss = trade.stop_loss_price
                         
                         # 更新止损价（如果新价格更优，即更高）
@@ -140,7 +147,7 @@ async def check_grid_fills_job():
                                 log_event("data",
                                     f"【模拟】全部网格成交 - 挂止损: {trade.event_slug} {trade.direction.upper()} "
                                     f"成本 {trade.entry_price:.3f} → 止损 {trade.stop_loss_price:.3f} "
-                                    f"(+{settings.STOP_LOSS_OFFSET:.2f})"
+                                    f"(+{patience}¢ patience)"
                                 )
                             else:
                                 log_event("data",
@@ -252,7 +259,14 @@ async def check_grid_fills_job():
                         f"filled_cost=${trade.grid_filled_cost:.2f}"
                     )
                     if settings.PROGRESSIVE_STOP_LOSS and all_grid_filled:
-                        new_stop_loss = round(trade.entry_price + settings.STOP_LOSS_OFFSET, 2)
+                        # 动态止损：从 BotState 读取 patience 值（美分）
+                        live_state = get_bot_state(db, is_live=True)
+                        patience = getattr(live_state, 'stop_loss_patience', None)
+                        if patience is None:
+                            patience = settings.STOP_LOSS_PATIENCE_INITIAL
+                        patience = max(settings.STOP_LOSS_PATIENCE_MIN, min(settings.STOP_LOSS_PATIENCE_MAX, patience))
+                        stop_loss_offset = patience / 100.0
+                        new_stop_loss = round(trade.entry_price + stop_loss_offset, 2)
                         old_stop_loss = trade.stop_loss_price
                         
                         # 更新止损价（如果新价格更优，即更高）
@@ -265,7 +279,8 @@ async def check_grid_fills_job():
                                 f"trade_id={trade.id}, slug={trade.event_slug}, "
                                 f"executor_stub={executor.is_stub}, "
                                 f"token_id={'OK' if trade.token_id else 'MISSING'}, "
-                                f"stop_loss_price={trade.stop_loss_price:.3f}, "
+                                f"stop_loss_price={trade.stop_loss_price:.3f} "
+                                f"(avg={trade.entry_price:.3f}+{patience}¢ patience), "
                                 f"shares={trade.grid_filled_shares}"
                             )
                             if not executor.is_stub:
