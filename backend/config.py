@@ -70,6 +70,7 @@ class Settings(BaseSettings):
     STOP_LOSS_PATIENCE_INITIAL: int = 5  # 初始耐心值（5美分）
     STOP_LOSS_PATIENCE_MIN: int = 0  # 最小耐心值（0 = 网格均价挂卖单）
     STOP_LOSS_PATIENCE_MAX: int = 10  # 最大耐心值（10美分）
+    STOP_LOSS_LATE_FILL_THRESHOLD: int = 93  # L1成交距收盘≤此秒数则不挂止损（尾盘临时下跌，等结算）
 
     # ==================== 信号模型参数 ====================
     # 模型使用市场价格作为基准，然后根据指标综合得分调整
