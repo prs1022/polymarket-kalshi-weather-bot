@@ -179,14 +179,23 @@ async def check_market_settlement(trade: Trade) -> Tuple[bool, Optional[float], 
         logger.info(f"Trade {trade.id} settled with NO FILLS (grid orders never filled) — P&L: $0.00")
         return True, settlement_value, 0.0
 
-    # If stop-loss was filled, we exited at break-even before settlement
+    # If stop-loss was filled, calculate exit PnL based on stop_loss_price
     if getattr(trade, 'stop_loss_filled', False):
-        pnl = 0.0
+        sl_price = getattr(trade, 'stop_loss_price', None)
+        filled_cost = getattr(trade, 'grid_filled_cost', None) or 0
+        filled_shares = getattr(trade, 'grid_filled_shares', None) or 0
+        if sl_price is not None and filled_shares > 0:
+            # L1止损网格模式：按止损价计算实际亏损
+            sell_revenue = sl_price * filled_shares
+            pnl = round(sell_revenue - filled_cost, 2)
+        else:
+            # 旧patience模式止损成交在保本价附近
+            pnl = 0.0
         mapped_dir = "UP" if trade.direction in ("up", "yes") else "DOWN"
         outcome = "UP" if settlement_value == 1.0 else "DOWN"
         would_win = "WOULD WIN" if mapped_dir == outcome else "WOULD LOSS"
         logger.info(f"Trade {trade.id} stop-loss settled: {mapped_dir} @ {trade.entry_price:.0%} -> "
-                    f"{would_win} but exited at break-even, P&L: $0.00")
+                    f"{would_win} but exited at stop_loss_price={sl_price}, P&L: ${pnl:+.2f}")
     else:
         pnl = calculate_pnl(trade, settlement_value)
         mapped_dir = "UP" if trade.direction in ("up", "yes") else "DOWN"
@@ -282,7 +291,7 @@ async def settle_pending_trades(db: Session) -> List[Trade]:
                 trade.settlement_time = datetime.utcnow()
 
                 if getattr(trade, 'stop_loss_filled', False):
-                    # Stop-loss exited at break-even — check if model direction was correct
+                    # Stop-loss exited before settlement — check if model direction was correct
                     direction = trade.direction
                     if direction == "up":
                         model_correct = (settlement_value == 1.0)
@@ -374,10 +383,13 @@ async def update_bot_state_with_settlements(db: Session, settled_trades: List[Tr
                     if trade.result == "win":
                         live_state.winning_trades += 1
 
-                # 动态止损耐心值更新：
+                # 动态止损耐心值更新（仅在非L1止损网格模式下生效）
+                # L1_STOPLOSS_MODE 下不使用 patience，跳过更新
                 # - 止损成交（成功）→ patience +1（止损价更高，更容易成交）
                 # - 止损未成交但挂过止损单（失败）→ patience -1（止损价更低，更容易成交）
-                if getattr(trade, 'stop_loss_filled', False):
+                if settings.L1_STOPLOSS_MODE:
+                    pass  # L1止损网格模式不使用 patience 机制
+                elif getattr(trade, 'stop_loss_filled', False):
                     # 止损成功成交
                     new_patience = min(settings.STOP_LOSS_PATIENCE_MAX, old_patience + 1)
                     if new_patience != old_patience:

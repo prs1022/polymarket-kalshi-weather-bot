@@ -72,13 +72,18 @@ class Settings(BaseSettings):
     STOP_LOSS_PATIENCE_MAX: int = 10  # 最大耐心值（10美分）
     STOP_LOSS_LATE_FILL_THRESHOLD: int = 93  # L1成交距收盘≤此秒数则不挂止损（尾盘临时下跌，等结算）
 
+    # L1止损网格模式：L1成交后立即平仓退出，不加仓等待
+    # True = 止损网格（L1价格达到即卖出L0，止损离场）
+    # False = 加仓网格（L1成交后持有，挂止损等反弹或结算）
+    L1_STOPLOSS_MODE: bool = True
+
     # ==================== 信号模型参数 ====================
     # 模型使用市场价格作为基准，然后根据指标综合得分调整
     # 公式: model_prob = market_prob + composite * COMPOSITE_MULTIPLIER
     # 限制范围: [market_prob ± MAX_MODEL_DEVIATION]
     COMPOSITE_MULTIPLIER: float = 0.15  # 综合得分乘数（最大偏离市场价15%）
     MAX_MODEL_DEVIATION: float = 0.20  # 最大偏离范围（市场价上下20%）
-    MIN_CONVERGENCE: int = 3  # 指标一致性要求（需要3/4指标同向，4/4太严，2/4反向）
+    MIN_CONVERGENCE: int = 2  # 指标一致性要求（需要3/4指标同向，4/4太严，2/4反向）
 
     INVERT_SIGNAL: bool = True  # 反转信号方向（模型是反向预测，翻转后使用）
 

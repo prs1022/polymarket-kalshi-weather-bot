@@ -129,46 +129,59 @@ async def check_grid_fills_job():
                     #        只有部分层成交 = 市场小幅波动，持有等待结算
                     all_grid_filled = all(o.status == "filled" for o in all_grid)
                     if settings.PROGRESSIVE_STOP_LOSS and all_grid_filled:
-                        # 93秒规则：L1成交距收盘时间 ≤阈值 则不挂止损，等结算
-                        # 尾盘临时下跌方向正确率高，止损反而砍掉盈利
-                        try:
-                            slug_ts = int(trade.event_slug.rsplit("-", 1)[-1])
-                            settlement_ts = slug_ts + 300
-                            secs_to_close = settlement_ts - int(datetime.utcnow().timestamp())
-                        except Exception:
-                            secs_to_close = 999  # 解析失败则默认挂止损
-                        
-                        if secs_to_close <= settings.STOP_LOSS_LATE_FILL_THRESHOLD:
-                            log_event("trade",
-                                f"【模拟】L1尾盘成交不挂止损: {trade.event_slug} {trade.direction.upper()} "
-                                f"距收盘{secs_to_close}s ≤{settings.STOP_LOSS_LATE_FILL_THRESHOLD}s, 持有等结算"
-                            )
+                        if settings.L1_STOPLOSS_MODE:
+                            # 止损网格模式：L0成交即设止损价=L1价位，等价格跌到则触发
+                            # 不买入L1，只把L1价格作为止损触发线
+                            stop_loss_trigger = settings.GRID_LOWER_BOUND
+                            if trade.stop_loss_price is None:
+                                trade.stop_loss_price = stop_loss_trigger
+                                log_event("trade",
+                                    f"【模拟】L0止损网格设置: {trade.event_slug} {trade.direction.upper()} "
+                                    f"买入 {trade.grid_filled_shares:.0f} 股 @ {trade.entry_price:.3f} | "
+                                    f"止损触发价 {stop_loss_trigger:.3f} (市场跌到此价即卖出)"
+                                )
                         else:
-                            # 动态止损：从 BotState 读取 patience 值（美分）
-                            live_state = get_bot_state(db, is_live=True)
-                            patience = getattr(live_state, 'stop_loss_patience', None)
-                            if patience is None:
-                                patience = settings.STOP_LOSS_PATIENCE_INITIAL
-                            patience = max(settings.STOP_LOSS_PATIENCE_MIN, min(settings.STOP_LOSS_PATIENCE_MAX, patience))
-                            stop_loss_offset = patience / 100.0
-                            new_stop_loss = round(trade.entry_price + stop_loss_offset, 2)
-                            old_stop_loss = trade.stop_loss_price
+                            # 加仓网格模式：93秒规则 + patience 机制
+                            # 93秒规则：L1成交距收盘时间 ≤阈值 则不挂止损，等结算
+                            # 尾盘临时下跌方向正确率高，止损反而砍掉盈利
+                            try:
+                                slug_ts = int(trade.event_slug.rsplit("-", 1)[-1])
+                                settlement_ts = slug_ts + 300
+                                secs_to_close = settlement_ts - int(datetime.utcnow().timestamp())
+                            except Exception:
+                                secs_to_close = 999  # 解析失败则默认挂止损
                             
-                            # 更新止损价（如果新价格更优，即更高）
-                            if old_stop_loss is None or new_stop_loss > old_stop_loss:
-                                trade.stop_loss_price = new_stop_loss
+                            if secs_to_close <= settings.STOP_LOSS_LATE_FILL_THRESHOLD:
+                                log_event("trade",
+                                    f"【模拟】L1尾盘成交不挂止损: {trade.event_slug} {trade.direction.upper()} "
+                                    f"距收盘{secs_to_close}s ≤{settings.STOP_LOSS_LATE_FILL_THRESHOLD}s, 持有等结算"
+                                )
+                            else:
+                                # 动态止损：从 BotState 读取 patience 值（美分）
+                                live_state = get_bot_state(db, is_live=True)
+                                patience = getattr(live_state, 'stop_loss_patience', None)
+                                if patience is None:
+                                    patience = settings.STOP_LOSS_PATIENCE_INITIAL
+                                patience = max(settings.STOP_LOSS_PATIENCE_MIN, min(settings.STOP_LOSS_PATIENCE_MAX, patience))
+                                stop_loss_offset = patience / 100.0
+                                new_stop_loss = round(trade.entry_price + stop_loss_offset, 2)
+                                old_stop_loss = trade.stop_loss_price
                                 
-                                if old_stop_loss is None:
-                                    log_event("data",
-                                        f"【模拟】全部网格成交 - 挂止损: {trade.event_slug} {trade.direction.upper()} "
-                                        f"成本 {trade.entry_price:.3f} → 止损 {trade.stop_loss_price:.3f} "
-                                        f"(+{patience}¢ patience, {secs_to_close}s to close)"
-                                    )
-                                else:
-                                    log_event("data",
-                                        f"【模拟】止损更新: {trade.event_slug} {trade.direction.upper()} "
-                                        f"成本 {trade.entry_price:.3f} → 止损 {old_stop_loss:.3f}→{trade.stop_loss_price:.3f}"
-                                    )
+                                # 更新止损价（如果新价格更优，即更高）
+                                if old_stop_loss is None or new_stop_loss > old_stop_loss:
+                                    trade.stop_loss_price = new_stop_loss
+                                    
+                                    if old_stop_loss is None:
+                                        log_event("data",
+                                            f"【模拟】全部网格成交 - 挂止损: {trade.event_slug} {trade.direction.upper()} "
+                                            f"成本 {trade.entry_price:.3f} → 止损 {trade.stop_loss_price:.3f} "
+                                            f"(+{patience}¢ patience, {secs_to_close}s to close)"
+                                        )
+                                    else:
+                                        log_event("data",
+                                            f"【模拟】止损更新: {trade.event_slug} {trade.direction.upper()} "
+                                            f"成本 {trade.entry_price:.3f} → 止损 {old_stop_loss:.3f}→{trade.stop_loss_price:.3f}"
+                                        )
 
                     log_event("data",
                         f"【模拟】Grid fill: {trade.event_slug} {trade.direction.upper()} "
@@ -274,91 +287,112 @@ async def check_grid_fills_job():
                         f"filled_cost=${trade.grid_filled_cost:.2f}"
                     )
                     if settings.PROGRESSIVE_STOP_LOSS and all_grid_filled:
-                        # 93秒规则：L1成交距收盘时间 ≤阈值 则不挂止损，等结算
-                        # 尾盘临时下跌方向正确率高，止损反而砍掉盈利
-                        try:
-                            slug_ts = int(trade.event_slug.rsplit("-", 1)[-1])
-                            settlement_ts = slug_ts + 300
-                            secs_to_close = settlement_ts - int(datetime.utcnow().timestamp())
-                        except Exception:
-                            secs_to_close = 999  # 解析失败则默认挂止损
-                        
-                        if secs_to_close <= settings.STOP_LOSS_LATE_FILL_THRESHOLD:
-                            log_event("trade",
-                                f"【实盘】L1尾盘成交不挂止损: {trade.event_slug} {trade.direction.upper()} "
-                                f"距收盘{secs_to_close}s ≤{settings.STOP_LOSS_LATE_FILL_THRESHOLD}s, 持有等结算"
-                            )
-                        else:
-                            # 动态止损：从 BotState 读取 patience 值（美分）
-                            live_state = get_bot_state(db, is_live=True)
-                            patience = getattr(live_state, 'stop_loss_patience', None)
-                            if patience is None:
-                                patience = settings.STOP_LOSS_PATIENCE_INITIAL
-                            patience = max(settings.STOP_LOSS_PATIENCE_MIN, min(settings.STOP_LOSS_PATIENCE_MAX, patience))
-                            stop_loss_offset = patience / 100.0
-                            new_stop_loss = round(trade.entry_price + stop_loss_offset, 2)
-                            old_stop_loss = trade.stop_loss_price
-                            
-                            # 更新止损价（如果新价格更优，即更高）
-                            if old_stop_loss is None or new_stop_loss > old_stop_loss:
-                                trade.stop_loss_price = new_stop_loss
-                                
-                                # For live trades, place or update real sell order
+                        if settings.L1_STOPLOSS_MODE:
+                            # 止损网格模式：L0成交即设止损触发价=L1价位
+                            # 不买入L1，只把L1价格作为止损触发线
+                            # Phase 2 会监控市场价格，跌到触发价则卖出
+                            stop_loss_trigger = settings.GRID_LOWER_BOUND
+                            if trade.stop_loss_price is None:
+                                trade.stop_loss_price = stop_loss_trigger
                                 logger.info(
-                                    f"[LIVE-DEBUG] 准备挂止损卖单: "
+                                    f"[LIVE-DEBUG] L0止损网格设置: "
                                     f"trade_id={trade.id}, slug={trade.event_slug}, "
-                                    f"executor_stub={executor.is_stub}, "
-                                    f"token_id={'OK' if trade.token_id else 'MISSING'}, "
-                                    f"stop_loss_price={trade.stop_loss_price:.3f} "
-                                    f"(avg={trade.entry_price:.3f}+{patience}¢ patience, {secs_to_close}s to close), "
-                                    f"shares={trade.grid_filled_shares}"
+                                    f"stop_loss_trigger={stop_loss_trigger:.3f}, "
+                                    f"shares={trade.grid_filled_shares}, "
+                                    f"token_id={'OK' if trade.token_id else 'MISSING'}"
                                 )
-                                if not executor.is_stub:
-                                    # Use stored token_id (persisted at trade creation)
-                                    sell_token_id = trade.token_id
+                                log_event("trade",
+                                    f"【实盘】L0止损网格设置: {trade.event_slug} {trade.direction.upper()} "
+                                    f"买入 {trade.grid_filled_shares:.0f} 股 @ {trade.entry_price:.3f} | "
+                                    f"止损触发价 {stop_loss_trigger:.3f} (市场跌到此价则卖出)"
+                                )
+                        else:
+                            # 加仓网格模式：93秒规则 + patience 机制
+                            # 93秒规则：L1成交距收盘时间 ≤阈值 则不挂止损，等结算
+                            # 尾盘临时下跌方向正确率高，止损反而砍掉盈利
+                            try:
+                                slug_ts = int(trade.event_slug.rsplit("-", 1)[-1])
+                                settlement_ts = slug_ts + 300
+                                secs_to_close = settlement_ts - int(datetime.utcnow().timestamp())
+                            except Exception:
+                                secs_to_close = 999  # 解析失败则默认挂止损
+                            
+                            if secs_to_close <= settings.STOP_LOSS_LATE_FILL_THRESHOLD:
+                                log_event("trade",
+                                    f"【实盘】L1尾盘成交不挂止损: {trade.event_slug} {trade.direction.upper()} "
+                                    f"距收盘{secs_to_close}s ≤{settings.STOP_LOSS_LATE_FILL_THRESHOLD}s, 持有等结算"
+                                )
+                            else:
+                                # 动态止损：从 BotState 读取 patience 值（美分）
+                                live_state = get_bot_state(db, is_live=True)
+                                patience = getattr(live_state, 'stop_loss_patience', None)
+                                if patience is None:
+                                    patience = settings.STOP_LOSS_PATIENCE_INITIAL
+                                patience = max(settings.STOP_LOSS_PATIENCE_MIN, min(settings.STOP_LOSS_PATIENCE_MAX, patience))
+                                stop_loss_offset = patience / 100.0
+                                new_stop_loss = round(trade.entry_price + stop_loss_offset, 2)
+                                old_stop_loss = trade.stop_loss_price
+                                
+                                # 更新止损价（如果新价格更优，即更高）
+                                if old_stop_loss is None or new_stop_loss > old_stop_loss:
+                                    trade.stop_loss_price = new_stop_loss
                                     
-                                    if sell_token_id:
-                                        # Cancel old sell order if exists
-                                        if trade.stop_loss_order_id:
-                                            executor.cancel_order(trade.stop_loss_order_id)
-                                            
-                                        # Place new sell order at updated stop-loss price
-                                        sell_order_id = executor.place_limit_sell(
-                                            token_id=sell_token_id,
-                                            price=trade.stop_loss_price,
-                                            shares=trade.grid_filled_shares,
-                                        )
-                                        logger.info(
-                                            f"[LIVE-DEBUG] 止损卖单结果: "
-                                            f"trade_id={trade.id}, "
-                                            f"sell_order_id={sell_order_id or 'FAILED'}, "
-                                            f"price={trade.stop_loss_price:.3f}, "
-                                            f"shares={trade.grid_filled_shares}"
-                                        )
-                                        if sell_order_id:
-                                            trade.stop_loss_order_id = sell_order_id
-                                            
-                                        if old_stop_loss is None:
-                                            log_event("trade",
-                                                f"【实盘】全部网格成交 - 挂止损: {trade.event_slug} "
-                                                f"sell {trade.grid_filled_shares:.0f} @ {trade.stop_loss_price:.3f} "
-                                                f"order={sell_order_id[:16] if sell_order_id else 'N/A'}..."
+                                    # For live trades, place or update real sell order
+                                    logger.info(
+                                        f"[LIVE-DEBUG] 准备挂止损卖单: "
+                                        f"trade_id={trade.id}, slug={trade.event_slug}, "
+                                        f"executor_stub={executor.is_stub}, "
+                                        f"token_id={'OK' if trade.token_id else 'MISSING'}, "
+                                        f"stop_loss_price={trade.stop_loss_price:.3f} "
+                                        f"(avg={trade.entry_price:.3f}+{patience}¢ patience, {secs_to_close}s to close), "
+                                        f"shares={trade.grid_filled_shares}"
+                                    )
+                                    if not executor.is_stub:
+                                        # Use stored token_id (persisted at trade creation)
+                                        sell_token_id = trade.token_id
+                                        
+                                        if sell_token_id:
+                                            # Cancel old sell order if exists
+                                            if trade.stop_loss_order_id:
+                                                executor.cancel_order(trade.stop_loss_order_id)
+                                                
+                                            # Place new sell order at updated stop-loss price
+                                            sell_order_id = executor.place_limit_sell(
+                                                token_id=sell_token_id,
+                                                price=trade.stop_loss_price,
+                                                shares=trade.grid_filled_shares,
                                             )
+                                            logger.info(
+                                                f"[LIVE-DEBUG] 止损卖单结果: "
+                                                f"trade_id={trade.id}, "
+                                                f"sell_order_id={sell_order_id or 'FAILED'}, "
+                                                f"price={trade.stop_loss_price:.3f}, "
+                                                f"shares={trade.grid_filled_shares}"
+                                            )
+                                            if sell_order_id:
+                                                trade.stop_loss_order_id = sell_order_id
+                                                
+                                            if old_stop_loss is None:
+                                                log_event("trade",
+                                                    f"【实盘】全部网格成交 - 挂止损: {trade.event_slug} "
+                                                    f"sell {trade.grid_filled_shares:.0f} @ {trade.stop_loss_price:.3f} "
+                                                    f"order={sell_order_id[:16] if sell_order_id else 'N/A'}..."
+                                                )
+                                            else:
+                                                log_event("trade",
+                                                    f"【实盘】止损更新: {trade.event_slug} "
+                                                    f"{old_stop_loss:.3f}→{trade.stop_loss_price:.3f} "
+                                                    f"order={sell_order_id[:16] if sell_order_id else 'N/A'}..."
+                                                )
                                         else:
-                                            log_event("trade",
-                                                f"【实盘】止损更新: {trade.event_slug} "
-                                                f"{old_stop_loss:.3f}→{trade.stop_loss_price:.3f} "
-                                                f"order={sell_order_id[:16] if sell_order_id else 'N/A'}..."
+                                            log_event("warning",
+                                                f"【实盘】止损单未挂出: trade无token_id for {trade.event_slug}"
                                             )
                                     else:
-                                        log_event("warning",
-                                            f"【实盘】止损单未挂出: trade无token_id for {trade.event_slug}"
+                                        log_event("data",
+                                            f"【实盘-STUB】全部网格成交止损: {trade.event_slug} "
+                                            f"成本 {trade.entry_price:.3f} → 止损 {trade.stop_loss_price:.3f}"
                                         )
-                                else:
-                                    log_event("data",
-                                        f"【实盘-STUB】全部网格成交止损: {trade.event_slug} "
-                                        f"成本 {trade.entry_price:.3f} → 止损 {trade.stop_loss_price:.3f}"
-                                    )
 
                     log_event("data",
                         f"【实盘】Grid update: {trade.event_slug} {trade.direction.upper()} "
@@ -366,60 +400,120 @@ async def check_grid_fills_job():
                         f"avg entry {trade.entry_price:.3f}, {trade.grid_filled_shares:.0f} shares, ${trade.grid_filled_cost:.2f}"
                     )
 
-        # --- Phase 2: Check stop-loss fills (sim: market price check, live: CLOB order status) ---
+        # --- Phase 2: Check stop-loss fills ---
+        # 加仓网格模式: sim=价格涨回止损价则成交, live=CLOB卖单状态查询
+        # 止损网格模式: sim=价格跌到止损价则成交, live=价格跌到止损价则挂卖单
         executor = get_executor()
         for trade in stop_loss_pending:
-            if trade.is_live:
-                # For live trades, check CLOB sell order status
-                if not trade.stop_loss_order_id:
-                    continue
-                
-                status_info = executor.get_order_status(trade.stop_loss_order_id)
-                if status_info["status"].lower() in ("matched", "filled"):
-                    trade.stop_loss_filled = True
-                    trade.stop_loss_filled_at = datetime.utcnow()
-                    total_stop_loss += 1
-                    
-                    log_event("trade",
-                        f"【实盘】Stop-loss FILLED: {trade.event_slug} {trade.direction.upper()} "
-                        f"sell @ {trade.stop_loss_price:.3f} | "
-                        f"break-even exit, {trade.grid_filled_shares:.0f} shares"
-                    )
-                elif status_info["status"] == "not_found":
-                    # Order may have been filled and cleared from API
-                    # Check recent trades for confirmation
-                    recent_trades = executor.get_recent_trades(limit=50)
-                    for rt in recent_trades:
-                        if rt.get("taker_order_id") == trade.stop_loss_order_id:
-                            trade.stop_loss_filled = True
-                            trade.stop_loss_filled_at = datetime.utcnow()
-                            total_stop_loss += 1
-                            
-                            log_event("trade",
-                                f"【实盘】Stop-loss FILLED (via trades): {trade.event_slug} "
-                                f"sell @ {trade.stop_loss_price:.3f} | "
-                                f"break-even exit, {trade.grid_filled_shares:.0f} shares"
-                            )
-                            break
-                continue
-
             market = market_map.get(trade.event_slug)
             if not market:
+                # For LIVE trades without market data, fall back to CLOB status check
+                if trade.is_live and trade.stop_loss_order_id:
+                    status_info = executor.get_order_status(trade.stop_loss_order_id)
+                    if status_info["status"].lower() in ("matched", "filled"):
+                        trade.stop_loss_filled = True
+                        trade.stop_loss_filled_at = datetime.utcnow()
+                        total_stop_loss += 1
+                        log_event("trade",
+                            f"【实盘】Stop-loss FILLED: {trade.event_slug} {trade.direction.upper()} "
+                            f"sell @ {trade.stop_loss_price:.3f} | "
+                            f"{trade.grid_filled_shares:.0f} shares"
+                        )
                 continue
 
             current_price = market.up_price if trade.direction == "up" else market.down_price
 
-            # Stop-loss sell order fills when market price rises back to or above stop_loss_price
-            if current_price >= trade.stop_loss_price:
-                trade.stop_loss_filled = True
-                trade.stop_loss_filled_at = datetime.utcnow()
-                total_stop_loss += 1
-
-                log_event("trade",
-                    f"【模拟】Stop-loss FILLED: {trade.event_slug} {trade.direction.upper()} "
-                    f"sell @ {trade.stop_loss_price:.3f} (market {current_price:.3f}) | "
-                    f"break-even exit, {trade.grid_filled_shares:.0f} shares"
-                )
+            if settings.L1_STOPLOSS_MODE:
+                # 止损网格模式：价格跌到止损价 → 触发卖出
+                if current_price <= trade.stop_loss_price:
+                    if trade.is_live:
+                        # LIVE：挂卖单（如果还没挂）
+                        if not trade.stop_loss_order_id and not executor.is_stub and trade.token_id:
+                            sell_order_id = executor.place_limit_sell(
+                                token_id=trade.token_id,
+                                price=trade.stop_loss_price,
+                                shares=trade.grid_filled_shares,
+                            )
+                            if sell_order_id:
+                                trade.stop_loss_order_id = sell_order_id
+                            # 挂单后不立即标记成交，等下个 tick 确认
+                            log_event("trade",
+                                f"【实盘】L0止损触发-挂卖单: {trade.event_slug} {trade.direction.upper()} "
+                                f"市场价 {current_price:.3f} ≤ 触发价 {trade.stop_loss_price:.3f} | "
+                                f"sell {trade.grid_filled_shares:.0f} @ {trade.stop_loss_price:.3f} "
+                                f"order={sell_order_id[:16] if sell_order_id else 'N/A'}..."
+                            )
+                        elif trade.stop_loss_order_id:
+                            # 已挂卖单，检查状态
+                            status_info = executor.get_order_status(trade.stop_loss_order_id)
+                            if status_info["status"].lower() in ("matched", "filled"):
+                                trade.stop_loss_filled = True
+                                trade.stop_loss_filled_at = datetime.utcnow()
+                                total_stop_loss += 1
+                                log_event("trade",
+                                    f"【实盘】L0止损 FILLED: {trade.event_slug} {trade.direction.upper()} "
+                                    f"sell @ {trade.stop_loss_price:.3f} (market {current_price:.3f}) | "
+                                    f"{trade.grid_filled_shares:.0f} shares, P&L ${trade.stop_loss_price * trade.grid_filled_shares - trade.grid_filled_cost:+.2f}"
+                                )
+                        elif executor.is_stub or not trade.token_id:
+                            # STUB模式：直接标记成交
+                            trade.stop_loss_filled = True
+                            trade.stop_loss_filled_at = datetime.utcnow()
+                            total_stop_loss += 1
+                            log_event("trade",
+                                f"【实盘-STUB】L0止损 FILLED: {trade.event_slug} {trade.direction.upper()} "
+                                f"sell @ {trade.stop_loss_price:.3f} (market {current_price:.3f})"
+                            )
+                    else:
+                        # SIM：直接标记成交
+                        trade.stop_loss_filled = True
+                        trade.stop_loss_filled_at = datetime.utcnow()
+                        total_stop_loss += 1
+                        log_event("trade",
+                            f"【模拟】L0止损 FILLED: {trade.event_slug} {trade.direction.upper()} "
+                            f"sell @ {trade.stop_loss_price:.3f} (market {current_price:.3f}) | "
+                            f"{trade.grid_filled_shares:.0f} shares, P&L ${trade.stop_loss_price * trade.grid_filled_shares - trade.grid_filled_cost:+.2f}"
+                        )
+            else:
+                # 加仓网格模式：价格涨回止损价 → 止损成交
+                if trade.is_live:
+                    # LIVE：检查 CLOB 卖单状态
+                    if not trade.stop_loss_order_id:
+                        continue
+                    status_info = executor.get_order_status(trade.stop_loss_order_id)
+                    if status_info["status"].lower() in ("matched", "filled"):
+                        trade.stop_loss_filled = True
+                        trade.stop_loss_filled_at = datetime.utcnow()
+                        total_stop_loss += 1
+                        log_event("trade",
+                            f"【实盘】Stop-loss FILLED: {trade.event_slug} {trade.direction.upper()} "
+                            f"sell @ {trade.stop_loss_price:.3f} | "
+                            f"{trade.grid_filled_shares:.0f} shares"
+                        )
+                    elif status_info["status"] == "not_found":
+                        recent_trades = executor.get_recent_trades(limit=50)
+                        for rt in recent_trades:
+                            if rt.get("taker_order_id") == trade.stop_loss_order_id:
+                                trade.stop_loss_filled = True
+                                trade.stop_loss_filled_at = datetime.utcnow()
+                                total_stop_loss += 1
+                                log_event("trade",
+                                    f"【实盘】Stop-loss FILLED (via trades): {trade.event_slug} "
+                                    f"sell @ {trade.stop_loss_price:.3f} | "
+                                    f"{trade.grid_filled_shares:.0f} shares"
+                                )
+                                break
+                else:
+                    # SIM：价格涨回止损价则成交
+                    if current_price >= trade.stop_loss_price:
+                        trade.stop_loss_filled = True
+                        trade.stop_loss_filled_at = datetime.utcnow()
+                        total_stop_loss += 1
+                        log_event("trade",
+                            f"【模拟】Stop-loss FILLED: {trade.event_slug} {trade.direction.upper()} "
+                            f"sell @ {trade.stop_loss_price:.3f} (market {current_price:.3f}) | "
+                            f"{trade.grid_filled_shares:.0f} shares"
+                        )
 
         if total_filled > 0 or total_stop_loss > 0 or total_cancelled > 0:
             db.commit()
@@ -547,8 +641,10 @@ async def scan_and_trade_job():
                 db.add(sim_trade)
                 db.flush()
 
-                # Create grid orders for sim
+                # Create grid orders for sim (L1_STOPLOSS_MODE: only L0, skip L1 buy)
                 for gl in grid_levels:
+                    if settings.L1_STOPLOSS_MODE and gl.level >= 1:
+                        continue  # 止损网格模式：不创建L1买单
                     go = GridOrder(
                         trade_id=sim_trade.id,
                         level=gl.level,
@@ -635,9 +731,11 @@ async def scan_and_trade_job():
                         db.add(live_trade)
                         db.flush()
 
-                        # Create grid orders with real CLOB orders
+                        # Create grid orders with real CLOB orders (L1_STOPLOSS_MODE: only L0, skip L1 buy)
 
                         for gl in grid_levels:
+                            if settings.L1_STOPLOSS_MODE and gl.level >= 1:
+                                continue  # 止损网格模式：不创建L1买单
                             clob_order_id = None
                             if token_id:
                                 clob_order_id = executor.place_limit_buy(
