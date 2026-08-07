@@ -424,26 +424,24 @@ async def check_grid_fills_job():
             current_price = market.up_price if trade.direction == "up" else market.down_price
 
             if settings.L1_STOPLOSS_MODE:
-                # 止损网格模式：价格跌到止损价 → 触发市价卖出
-                # 卖单挂极低价($0.01)确保立即成交在最优买单价
+                # 止损网格模式：价格跌到止损价 → 触发卖出
+                # 卖单挂止损触发价($0.20)，Polymarket上会成交
                 if current_price <= trade.stop_loss_price:
                     if trade.is_live:
-                        # LIVE：挂市价卖单（如果还没挂或上次挂失败）
+                        # LIVE：挂卖单（如果还没挂或上次挂失败）
                         if not trade.stop_loss_order_id and not executor.is_stub and trade.token_id:
-                            # 市价卖出：挂$0.01，会以最优买单价成交
-                            market_sell_price = 0.01
                             sell_order_id = executor.place_limit_sell(
                                 token_id=trade.token_id,
-                                price=market_sell_price,
+                                price=trade.stop_loss_price,
                                 shares=trade.grid_filled_shares,
                             )
                             if sell_order_id:
                                 trade.stop_loss_order_id = sell_order_id
                             # 挂单后不立即标记成交，等下个 tick 确认
                             log_event("trade",
-                                f"【实盘】L0止损触发-市价卖出: {trade.event_slug} {trade.direction.upper()} "
+                                f"【实盘】L0止损触发-挂卖单: {trade.event_slug} {trade.direction.upper()} "
                                 f"市场价 {current_price:.3f} ≤ 触发价 {trade.stop_loss_price:.3f} | "
-                                f"sell {trade.grid_filled_shares:.0f} @ market "
+                                f"sell {trade.grid_filled_shares:.0f} @ {trade.stop_loss_price:.3f} "
                                 f"order={sell_order_id[:16] if sell_order_id else 'N/A'}..."
                             )
                         elif trade.stop_loss_order_id:
@@ -462,20 +460,18 @@ async def check_grid_fills_job():
                                     f"{trade.grid_filled_shares:.0f} shares, P&L ${fill_price * trade.grid_filled_shares - trade.grid_filled_cost:+.2f}"
                                 )
                         elif executor.is_stub or not trade.token_id:
-                            # STUB模式：直接标记成交，用当前市场价
+                            # STUB模式：直接标记成交
                             trade.stop_loss_filled = True
                             trade.stop_loss_filled_at = datetime.utcnow()
-                            trade.stop_loss_price = current_price
                             total_stop_loss += 1
                             log_event("trade",
                                 f"【实盘-STUB】L0止损 FILLED: {trade.event_slug} {trade.direction.upper()} "
-                                f"sell @ {current_price:.3f} (market price)"
+                                f"sell @ {trade.stop_loss_price:.3f} (market {current_price:.3f})"
                             )
                     else:
-                        # SIM：直接标记成交，用当前市场价
+                        # SIM：直接标记成交
                         trade.stop_loss_filled = True
                         trade.stop_loss_filled_at = datetime.utcnow()
-                        trade.stop_loss_price = current_price
                         total_stop_loss += 1
                         log_event("trade",
                             f"【模拟】L0止损 FILLED: {trade.event_slug} {trade.direction.upper()} "
@@ -523,14 +519,14 @@ async def check_grid_fills_job():
                             f"{trade.grid_filled_shares:.0f} shares"
                         )
 
-        if total_filled > 0 or total_stop_loss > 0 or total_cancelled > 0:
-            db.commit()
-            if total_filled > 0:
-                logger.info(f"Grid fills: {total_filled} orders filled")
-            if total_cancelled > 0:
-                logger.info(f"Grid cancelled: {total_cancelled} orders expired (market closed)")
-            if total_stop_loss > 0:
-                logger.info(f"Stop-loss fills: {total_stop_loss} trades exited at break-even")
+        # 始終提交：即使止損賣單只是掛出未成交，也需要保存 order_id
+        db.commit()
+        if total_filled > 0:
+            logger.info(f"Grid fills: {total_filled} orders filled")
+        if total_cancelled > 0:
+            logger.info(f"Grid cancelled: {total_cancelled} orders expired (market closed)")
+        if total_stop_loss > 0:
+            logger.info(f"Stop-loss fills: {total_stop_loss} trades exited")
 
     except Exception as e:
         logger.warning(f"Grid fill check error: {e}")
