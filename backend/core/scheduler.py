@@ -447,18 +447,50 @@ async def check_grid_fills_job():
                         elif trade.stop_loss_order_id:
                             # 已挂卖单，检查状态
                             status_info = executor.get_order_status(trade.stop_loss_order_id)
+                            actual_fill_price = None
                             if status_info["status"].lower() in ("matched", "filled"):
+                                # order.price 是挂单价，需要从 trades 接口拿真实成交价
+                                actual_fill_price = status_info.get("filled_price") or trade.stop_loss_price
+                                # 尝试从 trades 接口获取真实成交价（如 0.189 而非 0.20）
+                                try:
+                                    recent_trades = executor.get_recent_trades(limit=50)
+                                    for rt in recent_trades:
+                                        if rt.get("taker_order_id") == trade.stop_loss_order_id:
+                                            rt_price = float(rt.get("price", 0))
+                                            if rt_price > 0:
+                                                actual_fill_price = rt_price
+                                            break
+                                except Exception:
+                                    pass
                                 trade.stop_loss_filled = True
                                 trade.stop_loss_filled_at = datetime.utcnow()
-                                # 实际成交价 = 挂单价或查询返回的成交价
-                                fill_price = status_info.get("filled_price", trade.stop_loss_price) or trade.stop_loss_price
-                                trade.stop_loss_price = fill_price
+                                trade.stop_loss_price = actual_fill_price
                                 total_stop_loss += 1
                                 log_event("trade",
                                     f"【实盘】L0止损 FILLED: {trade.event_slug} {trade.direction.upper()} "
-                                    f"sell @ {fill_price:.3f} (trigger was {trade.stop_loss_price:.3f}) | "
-                                    f"{trade.grid_filled_shares:.0f} shares, P&L ${fill_price * trade.grid_filled_shares - trade.grid_filled_cost:+.2f}"
+                                    f"sell @ {actual_fill_price:.3f} | "
+                                    f"{trade.grid_filled_shares:.0f} shares, P&L ${actual_fill_price * trade.grid_filled_shares - trade.grid_filled_cost:+.2f}"
                                 )
+                            elif status_info["status"].lower() == "not_found":
+                                # 订单可能已过期但已成交，查 trades 接口
+                                try:
+                                    recent_trades = executor.get_recent_trades(limit=50)
+                                    for rt in recent_trades:
+                                        if rt.get("taker_order_id") == trade.stop_loss_order_id:
+                                            rt_price = float(rt.get("price", 0))
+                                            actual_fill_price = rt_price if rt_price > 0 else trade.stop_loss_price
+                                            trade.stop_loss_filled = True
+                                            trade.stop_loss_filled_at = datetime.utcnow()
+                                            trade.stop_loss_price = actual_fill_price
+                                            total_stop_loss += 1
+                                            log_event("trade",
+                                                f"【实盘】L0止损 FILLED (via trades): {trade.event_slug} {trade.direction.upper()} "
+                                                f"sell @ {actual_fill_price:.3f} | "
+                                                f"{trade.grid_filled_shares:.0f} shares, P&L ${actual_fill_price * trade.grid_filled_shares - trade.grid_filled_cost:+.2f}"
+                                            )
+                                            break
+                                except Exception:
+                                    pass
                         elif executor.is_stub or not trade.token_id:
                             # STUB模式：直接标记成交
                             trade.stop_loss_filled = True
