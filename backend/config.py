@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     SETTLEMENT_INTERVAL_SECONDS: int = 60  # 结算检查间隔（秒） - 每1分钟检查结算
     BTC_PRICE_SOURCE: str = "coinbase"  # BTC价格数据源
     MIN_EDGE_THRESHOLD: float = 0.07  # 最小优势阈值（7%） - 低于此值不开单
-    MIN_ENTRY_PRICE: float = 0.51  # 最低入场价格（40美分） - 低于此价格不买入
+    MIN_ENTRY_PRICE: float = 0.4  # 最低入场价格（40美分） - 低于此价格不买入
     MAX_ENTRY_PRICE: float = 0.55  # 最高入场价格（55美分） - 高于此价格不买入
     MAX_TRADES_PER_WINDOW: int = 1  # 每个时间窗口最多交易数
     MAX_TOTAL_PENDING_TRADES: int = 5  # 最大待结算单数
