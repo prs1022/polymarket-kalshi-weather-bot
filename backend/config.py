@@ -83,7 +83,7 @@ class Settings(BaseSettings):
     # 限制范围: [market_prob ± MAX_MODEL_DEVIATION]
     COMPOSITE_MULTIPLIER: float = 0.15  # 综合得分乘数（最大偏离市场价15%）
     MAX_MODEL_DEVIATION: float = 0.20  # 最大偏离范围（市场价上下20%）
-    MIN_CONVERGENCE: int = 2  # 指标一致性要求（需要3/4指标同向，4/4太严，2/4反向）
+    MIN_CONVERGENCE: int = 3  # 指标一致性要求（需要3/4指标同向，4/4太严，2/4反向）
 
     INVERT_SIGNAL: bool = True  # 反转信号方向（模型是反向预测，翻转后使用）
 

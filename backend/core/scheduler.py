@@ -729,84 +729,94 @@ async def scan_and_trade_job():
 
                 # --- Create LIVE trade (if enabled) ---
                 if settings.LIVE_TRADING_ENABLED and live_state and live_state.is_running:
-                    # Check if we already have a LIVE trade for this market
-                    existing_live = db.query(Trade).filter(
-                        Trade.event_slug == signal.market.slug,
-                        Trade.settled == False,
-                        Trade.is_live == True
-                    ).first()
+                    # --- LIVE Daily loss circuit breaker ---
+                    live_daily_pnl = db.query(func.coalesce(func.sum(Trade.pnl), 0.0)).filter(
+                        Trade.settled == True,
+                        Trade.is_live == True,
+                        Trade.settlement_time >= today_start
+                    ).scalar()
 
-                    if not existing_live:
-                        # Resolve token_id before creating trade (needed for buy orders and sell orders)
-                        executor = get_executor()
-                        token_id = signal.market.up_token_id if signal.direction == "up" else signal.market.down_token_id
+                    if live_daily_pnl <= -settings.DAILY_LOSS_LIMIT:
+                        log_event("warning", f"LIVE daily loss limit hit: ${live_daily_pnl:.2f} (limit: -${settings.DAILY_LOSS_LIMIT:.0f}). Skipping LIVE trade.")
+                    else:
+                        # Check if we already have a LIVE trade for this market
+                        existing_live = db.query(Trade).filter(
+                            Trade.event_slug == signal.market.slug,
+                            Trade.settled == False,
+                            Trade.is_live == True
+                        ).first()
 
-                        logger.info(
-                            f"[LIVE-DEBUG] 创建实盘交易: "
-                            f"slug={signal.market.slug}, dir={signal.direction}, "
-                            f"executor_stub={executor.is_stub}, "
-                            f"token_id={'OK' if token_id else 'MISSING'}, "
-                            f"entry={entry_price:.3f}, trade_size=${trade_size:.2f}"
-                        )
+                        if not existing_live:
+                            # Resolve token_id before creating trade (needed for buy orders and sell orders)
+                            executor = get_executor()
+                            token_id = signal.market.up_token_id if signal.direction == "up" else signal.market.down_token_id
 
-                        live_trade = Trade(
-                            market_ticker=signal.market.market_id,
-                            platform="polymarket",
-                            event_slug=signal.market.slug,
-                            direction=signal.direction,
-                            entry_price=entry_price,
-                            size=round(trade_size, 2),
-                            shares=round(trade_size / entry_price, 2) if entry_price > 0 else 0,
-                            model_probability=signal.model_probability,
-                            market_price_at_entry=signal.market_probability,
-                            edge_at_entry=signal.edge,
-                            grid_total_budget=round(trade_size, 2),
-                            grid_filled_cost=0.0,
-                            grid_filled_shares=0.0,
-                            is_live=True,
-                            token_id=token_id,
-                        )
-                        db.add(live_trade)
-                        db.flush()
-
-                        # Create grid orders with real CLOB orders (L1_STOPLOSS_MODE: only L0, skip L1 buy)
-
-                        for gl in grid_levels:
-                            if settings.L1_STOPLOSS_MODE and gl.level >= 1:
-                                continue  # 止损网格模式：不创建L1买单
-                            clob_order_id = None
-                            if token_id:
-                                clob_order_id = executor.place_limit_buy(
-                                    token_id=token_id,
-                                    price=gl.limit_price,
-                                    size=gl.cost,
-                                )
-                            else:
-                                logger.warning(
-                                    f"[LIVE-DEBUG] 网格买单跳过: token_id为空! "
-                                    f"slug={signal.market.slug}, L{gl.level} @ {gl.limit_price}"
-                                )
                             logger.info(
-                                f"[LIVE-DEBUG] 网格L{gl.level}买单: "
-                                f"limit={gl.limit_price:.3f}, shares={gl.shares}, cost=${gl.cost:.2f}, "
-                                f"clob_order_id={clob_order_id or 'NONE'}"
+                                f"[LIVE-DEBUG] 创建实盘交易: "
+                                f"slug={signal.market.slug}, dir={signal.direction}, "
+                                f"executor_stub={executor.is_stub}, "
+                                f"token_id={'OK' if token_id else 'MISSING'}, "
+                                f"entry={entry_price:.3f}, trade_size=${trade_size:.2f}"
                             )
-                            go = GridOrder(
-                                trade_id=live_trade.id,
-                                level=gl.level,
-                                limit_price=gl.limit_price,
-                                shares=gl.shares,
-                                cost=gl.cost,
-                                status="pending",
-                                clob_order_id=clob_order_id,
-                            )
-                            db.add(go)
 
-                        live_state.total_trades += 1
-                        log_event("trade",
-                            f"【实盘】BTC {signal.direction.upper()} grid ${trade_size:.0f} | "
-                            f"{len(grid_levels)} levels @ {entry_price:.0%}→{grid_levels[-1].limit_price:.0%} | {signal.market.slug}"
-                        )
+                            live_trade = Trade(
+                                market_ticker=signal.market.market_id,
+                                platform="polymarket",
+                                event_slug=signal.market.slug,
+                                direction=signal.direction,
+                                entry_price=entry_price,
+                                size=round(trade_size, 2),
+                                shares=round(trade_size / entry_price, 2) if entry_price > 0 else 0,
+                                model_probability=signal.model_probability,
+                                market_price_at_entry=signal.market_probability,
+                                edge_at_entry=signal.edge,
+                                grid_total_budget=round(trade_size, 2),
+                                grid_filled_cost=0.0,
+                                grid_filled_shares=0.0,
+                                is_live=True,
+                                token_id=token_id,
+                            )
+                            db.add(live_trade)
+                            db.flush()
+
+                            # Create grid orders with real CLOB orders (L1_STOPLOSS_MODE: only L0, skip L1 buy)
+
+                            for gl in grid_levels:
+                                if settings.L1_STOPLOSS_MODE and gl.level >= 1:
+                                    continue  # 止损网格模式：不创建L1买单
+                                clob_order_id = None
+                                if token_id:
+                                    clob_order_id = executor.place_limit_buy(
+                                        token_id=token_id,
+                                        price=gl.limit_price,
+                                        size=gl.cost,
+                                    )
+                                else:
+                                    logger.warning(
+                                        f"[LIVE-DEBUG] 网格买单跳过: token_id为空! "
+                                        f"slug={signal.market.slug}, L{gl.level} @ {gl.limit_price}"
+                                    )
+                                logger.info(
+                                    f"[LIVE-DEBUG] 网格L{gl.level}买单: "
+                                    f"limit={gl.limit_price:.3f}, shares={gl.shares}, cost=${gl.cost:.2f}, "
+                                    f"clob_order_id={clob_order_id or 'NONE'}"
+                                )
+                                go = GridOrder(
+                                    trade_id=live_trade.id,
+                                    level=gl.level,
+                                    limit_price=gl.limit_price,
+                                    shares=gl.shares,
+                                    cost=gl.cost,
+                                    status="pending",
+                                    clob_order_id=clob_order_id,
+                                )
+                                db.add(go)
+
+                            live_state.total_trades += 1
+                            log_event("trade",
+                                f"【实盘】BTC {signal.direction.upper()} grid ${trade_size:.0f} | "
+                                f"{len(grid_levels)} levels @ {entry_price:.0%}→{grid_levels[-1].limit_price:.0%} | {signal.market.slug}"
+                            )
 
             sim_state.last_run = datetime.utcnow()
             if live_state:
