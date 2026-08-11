@@ -451,9 +451,8 @@ async def check_grid_fills_job():
                             status_info = executor.get_order_status(trade.stop_loss_order_id)
                             actual_fill_price = None
                             if status_info["status"].lower() in ("matched", "filled"):
-                                # order.price 是挂单价，需要从 trades 接口拿真实成交价
-                                actual_fill_price = status_info.get("filled_price") or trade.stop_loss_price
-                                # 尝试从 trades 接口获取真实成交价（如 0.189 而非 0.20）
+                                # 市价卖单挂$0.01，order.price=$0.01 不是真实成交价
+                                # 必须从 trades 接口拿真实成交价
                                 try:
                                     recent_trades = executor.get_recent_trades(limit=50)
                                     for rt in recent_trades:
@@ -464,6 +463,10 @@ async def check_grid_fills_job():
                                             break
                                 except Exception:
                                     pass
+                                # 回退：如果 trades 接口没找到，用当前市场价估算
+                                if actual_fill_price is None:
+                                    actual_fill_price = current_price
+                                    log_event("warning", f"止损成交价未找到，用市场价估算: {current_price:.3f}")
                                 trade.stop_loss_filled = True
                                 trade.stop_loss_filled_at = datetime.utcnow()
                                 trade.stop_loss_price = actual_fill_price
@@ -480,7 +483,7 @@ async def check_grid_fills_job():
                                     for rt in recent_trades:
                                         if rt.get("taker_order_id") == trade.stop_loss_order_id:
                                             rt_price = float(rt.get("price", 0))
-                                            actual_fill_price = rt_price if rt_price > 0 else trade.stop_loss_price
+                                            actual_fill_price = rt_price if rt_price > 0 else current_price
                                             trade.stop_loss_filled = True
                                             trade.stop_loss_filled_at = datetime.utcnow()
                                             trade.stop_loss_price = actual_fill_price
