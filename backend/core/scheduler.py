@@ -424,24 +424,26 @@ async def check_grid_fills_job():
             current_price = market.up_price if trade.direction == "up" else market.down_price
 
             if settings.L1_STOPLOSS_MODE:
-                # 止损网格模式：价格跌到止损价 → 触发卖出
-                # 卖单挂止损触发价($0.20)，Polymarket上会成交
+                # 止损网格模式：价格跌到止损价 → 触发市价卖出
+                # 挂 $0.01 市价卖单，确保以最优买单价立即成交
                 if current_price <= trade.stop_loss_price:
                     if trade.is_live:
-                        # LIVE：挂卖单（如果还没挂或上次挂失败）
+                        # LIVE：挂市价卖单（如果还没挂或上次挂失败）
                         if not trade.stop_loss_order_id and not executor.is_stub and trade.token_id:
+                            # 市价卖出：挂 $0.01，会以最优买单价成交
+                            market_sell_price = 0.01
                             sell_order_id = executor.place_limit_sell(
                                 token_id=trade.token_id,
-                                price=trade.stop_loss_price,
+                                price=market_sell_price,
                                 shares=trade.grid_filled_shares,
                             )
                             if sell_order_id:
                                 trade.stop_loss_order_id = sell_order_id
                             # 挂单后不立即标记成交，等下个 tick 确认
                             log_event("trade",
-                                f"【实盘】L0止损触发-挂卖单: {trade.event_slug} {trade.direction.upper()} "
+                                f"【实盘】L0止损触发-市价卖出: {trade.event_slug} {trade.direction.upper()} "
                                 f"市场价 {current_price:.3f} ≤ 触发价 {trade.stop_loss_price:.3f} | "
-                                f"sell {trade.grid_filled_shares:.0f} @ {trade.stop_loss_price:.3f} "
+                                f"sell {trade.grid_filled_shares:.0f} @ market (挂$0.01) "
                                 f"order={sell_order_id[:16] if sell_order_id else 'N/A'}..."
                             )
                         elif trade.stop_loss_order_id:
