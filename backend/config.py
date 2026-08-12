@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     SETTLEMENT_INTERVAL_SECONDS: int = 60  # 结算检查间隔（秒） - 每1分钟检查结算
     BTC_PRICE_SOURCE: str = "coinbase"  # BTC价格数据源
     MIN_EDGE_THRESHOLD: float = 0.07  # 最小优势阈值（7%） - 低于此值不开单
-    MIN_ENTRY_PRICE: float = 0.4  # 最低入场价格（40美分） - 低于此价格不买入
+    MIN_ENTRY_PRICE: float = 0.49  # 最低入场价格（40美分） - 低于此价格不买入
     MAX_ENTRY_PRICE: float = 0.55  # 最高入场价格（55美分） - 高于此价格不买入
     MAX_TRADES_PER_WINDOW: int = 1  # 每个时间窗口最多交易数
     MAX_TOTAL_PENDING_TRADES: int = 5  # 最大待结算单数
@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     GRID_LOWER_BOUND: float = 0.20  # 网格下限价格（20美分）- 固定值，从当前价均分到30¢
 
     # ==================== 风险管理配置 ====================
-    DAILY_LOSS_LIMIT: float = 15.0  # 每日最大亏损（美元）
+    DAILY_LOSS_LIMIT: float = 10.0  # 每日最大亏损（美元）
     MAX_TRADE_SIZE: float = 2.0  # 单笔最大交易额（美元）
     MIN_TIME_REMAINING: int = 480  # 最少剩余时间（秒） - 距离结算<480秒不交易
     MAX_TIME_REMAINING: int = 600  # 最多剩余时间（秒） - 只交易当前和下个5分钟窗口
