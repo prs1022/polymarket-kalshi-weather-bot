@@ -100,9 +100,12 @@ async def check_grid_fills_job():
         total_stop_loss = 0
         total_cancelled = 0
 
-        # Separate sim and live pending orders
-        sim_pending = [o for o in pending if not o.clob_order_id]
-        live_pending = [o for o in pending if o.clob_order_id]
+        # Separate sim and live pending orders by trade.is_live (not clob_order_id)
+        # 因为 LIVE 买单失败时 clob_order_id=None，会被误分类为 SIM
+        trade_ids = set(o.trade_id for o in pending)
+        trade_map = {t.id: t for t in db.query(Trade).filter(Trade.id.in_(trade_ids)).all()}
+        sim_pending = [o for o in pending if not trade_map.get(o.trade_id, Trade()).is_live]
+        live_pending = [o for o in pending if trade_map.get(o.trade_id, Trade()).is_live]
 
         # --- Phase 1a: Check SIM grid order fills (market price vs limit) ---
         if sim_pending:
@@ -223,12 +226,15 @@ async def check_grid_fills_job():
 
                 for go in trade_grid:
                     if not go.clob_order_id:
+                        # LIVE 买单未成功下到 CLOB（余额不足等），标记为 cancelled
                         logger.warning(
-                            f"[LIVE-DEBUG] 网格L{go.level}无CLOB订单ID: "
+                            f"[LIVE] 网格L{go.level}买单未成交(无CLOB订单): "
                             f"trade_id={trade.id}, slug={trade.event_slug}, "
                             f"limit={go.limit_price}, status={go.status}"
                         )
-                        continue
+                        go.status = "cancelled"
+                        go.filled_at = datetime.utcnow()
+                        newly_resolved.append(go)
                     
                     # Check if this order appears in recent fills
                     fill_info = fills_map.get(go.clob_order_id)
