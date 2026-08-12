@@ -615,16 +615,23 @@ async def scan_and_trade_job():
             MAX_TRADE_FRACTION = 0.15  # Increased from 3% to 15% per trade (was too conservative)
             MAX_TOTAL_PENDING = min(settings.MAX_TOTAL_PENDING_TRADES, 5)  # Cap at 5 for small bankrolls
 
-            # --- Daily loss circuit breaker (sim only) ---
+            # --- Daily loss circuit breaker (sim) ---
             today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
-            daily_pnl = db.query(func.coalesce(func.sum(Trade.pnl), 0.0)).filter(
+            settled_pnl = db.query(func.coalesce(func.sum(Trade.pnl), 0.0)).filter(
                 Trade.settled == True,
                 Trade.is_live == False,
                 Trade.settlement_time >= today_start
             ).scalar()
+            # 未结算交易的最大潜在亏损（假设全部输掉）
+            pending_at_risk = db.query(func.coalesce(func.sum(Trade.grid_filled_cost), 0.0)).filter(
+                Trade.settled == False,
+                Trade.is_live == False,
+                Trade.timestamp >= today_start
+            ).scalar()
+            effective_pnl = settled_pnl - pending_at_risk
 
-            if daily_pnl <= -settings.DAILY_LOSS_LIMIT:
-                log_event("warning", f"Daily loss limit hit: ${daily_pnl:.2f} (limit: -${settings.DAILY_LOSS_LIMIT:.0f}). Stopping trades.")
+            if effective_pnl <= -settings.DAILY_LOSS_LIMIT:
+                log_event("warning", f"SIM daily loss limit: settled=${settled_pnl:.2f}, pending_at_risk=${pending_at_risk:.2f}, effective=${effective_pnl:.2f} (limit: -${settings.DAILY_LOSS_LIMIT:.0f}). Stopping trades.")
                 return
 
             # Count pending sim trades
@@ -739,14 +746,20 @@ async def scan_and_trade_job():
                 # --- Create LIVE trade (if enabled) ---
                 if settings.LIVE_TRADING_ENABLED and live_state and live_state.is_running:
                     # --- LIVE Daily loss circuit breaker ---
-                    live_daily_pnl = db.query(func.coalesce(func.sum(Trade.pnl), 0.0)).filter(
+                    live_settled_pnl = db.query(func.coalesce(func.sum(Trade.pnl), 0.0)).filter(
                         Trade.settled == True,
                         Trade.is_live == True,
                         Trade.settlement_time >= today_start
                     ).scalar()
+                    live_pending_at_risk = db.query(func.coalesce(func.sum(Trade.grid_filled_cost), 0.0)).filter(
+                        Trade.settled == False,
+                        Trade.is_live == True,
+                        Trade.timestamp >= today_start
+                    ).scalar()
+                    live_effective_pnl = live_settled_pnl - live_pending_at_risk
 
-                    if live_daily_pnl <= -settings.DAILY_LOSS_LIMIT:
-                        log_event("warning", f"LIVE daily loss limit hit: ${live_daily_pnl:.2f} (limit: -${settings.DAILY_LOSS_LIMIT:.0f}). Skipping LIVE trade.")
+                    if live_effective_pnl <= -settings.DAILY_LOSS_LIMIT:
+                        log_event("warning", f"LIVE daily loss limit: settled=${live_settled_pnl:.2f}, pending_at_risk=${live_pending_at_risk:.2f}, effective=${live_effective_pnl:.2f} (limit: -${settings.DAILY_LOSS_LIMIT:.0f}). Skipping LIVE trade.")
                     else:
                         # Check if we already have a LIVE trade for this market
                         existing_live = db.query(Trade).filter(
