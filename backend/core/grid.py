@@ -76,8 +76,9 @@ def generate_fibonacci_grid(
     if extreme_price is None:
         extreme_price = settings.GRID_LOWER_BOUND
 
-    # Fixed upper bound: MIN_ENTRY_PRICE (e.g. 0.48)
-    grid_upper = settings.MIN_ENTRY_PRICE
+    # Grid upper bound = current market price (so orders actually fill)
+    # MIN_ENTRY_PRICE is used as a filter in signals.py, not as the buy price
+    grid_upper = current_price
 
     if grid_upper <= extreme_price:
         shares = max(min_shares, int(budget / grid_upper))

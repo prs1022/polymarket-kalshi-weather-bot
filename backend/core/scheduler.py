@@ -78,6 +78,18 @@ async def check_grid_fills_job():
     """
     db = SessionLocal()
     try:
+        # --- Clean up stale grid orders (trade already settled but order still pending) ---
+        stale = db.query(GridOrder).join(Trade, GridOrder.trade_id == Trade.id).filter(
+            GridOrder.status == "pending",
+            Trade.settled == True,
+        ).all()
+        for go in stale:
+            go.status = "cancelled"
+            go.filled_at = datetime.utcnow()
+        if stale:
+            db.commit()
+            logger.info(f"Cleaned up {len(stale)} stale grid orders (trade already settled)")
+
         # Find all pending grid orders
         pending = db.query(GridOrder).filter(GridOrder.status == "pending").all()
 
