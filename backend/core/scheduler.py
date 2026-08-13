@@ -247,6 +247,7 @@ async def check_grid_fills_job():
                         go.status = "cancelled"
                         go.filled_at = datetime.utcnow()
                         newly_resolved.append(go)
+                        continue  # 无CLOB订单，跳过后续状态检查
                     
                     # Check if this order appears in recent fills
                     fill_info = fills_map.get(go.clob_order_id)
@@ -445,6 +446,29 @@ async def check_grid_fills_job():
                 # 止损网格模式：价格跌到止损价 → 触发市价卖出
                 # 挂 $0.01 市价卖单，确保以最优买单价立即成交
                 if current_price <= trade.stop_loss_price:
+                    # --- 止损确认延迟：等待N秒仍在此价才执行卖出 ---
+                    if settings.STOPLOSS_CONFIRMATION_DELAY > 0 and not trade.stop_loss_order_id:
+                        if trade.stop_loss_triggered_at is None:
+                            # 首次跌破触发价，记录时间等待确认
+                            trade.stop_loss_triggered_at = datetime.utcnow()
+                            db.commit()
+                            log_event("info",
+                                f"止损触发等待确认: {trade.event_slug} {trade.direction.upper()} "
+                                f"市场价 {current_price:.3f} ≤ 触发价 {trade.stop_loss_price:.3f} | "
+                                f"等待 {settings.STOPLOSS_CONFIRMATION_DELAY}秒确认"
+                            )
+                            continue
+                        else:
+                            # 已触发，检查是否已过确认期
+                            elapsed = (datetime.utcnow() - trade.stop_loss_triggered_at).total_seconds()
+                            if elapsed < settings.STOPLOSS_CONFIRMATION_DELAY:
+                                log_event("info",
+                                    f"止损确认等待中: {trade.event_slug} "
+                                    f"已等待 {elapsed:.0f}/{settings.STOPLOSS_CONFIRMATION_DELAY}秒 | "
+                                    f"市场价 {current_price:.3f}"
+                                )
+                                continue
+                    # --- 确认通过（或延迟=0），执行止损卖出 ---
                     if trade.is_live:
                         # LIVE：挂市价卖单（如果还没挂或上次挂失败）
                         if not trade.stop_loss_order_id and not executor.is_stub and trade.token_id:
@@ -532,6 +556,16 @@ async def check_grid_fills_job():
                             f"【模拟】L0止损 FILLED: {trade.event_slug} {trade.direction.upper()} "
                             f"sell @ {trade.stop_loss_price:.3f} (market {current_price:.3f}) | "
                             f"{trade.grid_filled_shares:.0f} shares, P&L ${trade.stop_loss_price * trade.grid_filled_shares - trade.grid_filled_cost:+.2f}"
+                        )
+                else:
+                    # 价格回升到触发价以上，重置确认计时器
+                    if trade.stop_loss_triggered_at is not None and not trade.stop_loss_order_id:
+                        trade.stop_loss_triggered_at = None
+                        db.commit()
+                        log_event("info",
+                            f"止损触发取消: {trade.event_slug} {trade.direction.upper()} "
+                            f"市场价回升至 {current_price:.3f} > 触发价 {trade.stop_loss_price:.3f} | "
+                            f"确认期间价格回弹，取消止损"
                         )
             else:
                 # 加仓网格模式：价格涨回止损价 → 止损成交

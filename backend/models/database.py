@@ -58,6 +58,7 @@ class Trade(Base):
     stop_loss_filled = Column(Boolean, default=False)      # Whether the stop-loss sell order filled
     stop_loss_filled_at = Column(DateTime, nullable=True)  # When the stop-loss filled
     stop_loss_order_id = Column(String, nullable=True)    # CLOB sell order ID (live trades only)
+    stop_loss_triggered_at = Column(DateTime, nullable=True)  # When price first dropped below trigger (confirmation delay)
     token_id = Column(String, nullable=True)              # CLOB token ID (stored at trade creation for sell orders)
 
 
@@ -296,6 +297,7 @@ def ensure_schema():
         ("stop_loss_filled", "BOOLEAN DEFAULT 0"),
         ("stop_loss_filled_at", "DATETIME"),
         ("stop_loss_order_id", "VARCHAR"),
+        ("stop_loss_triggered_at", "DATETIME"),
     ]:
         if col not in columns:
             try:

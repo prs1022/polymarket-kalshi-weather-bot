@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     # False = 加仓网格（L1成交后持有，挂止损等反弹或结算）
     L1_STOPLOSS_MODE: bool = True
 
+    # 止损确认延迟（秒）：价格跌破触发价后，等待N秒仍在此价才执行卖出
+    # 用于过滤瞬时插针造成的误杀（0=关闭确认，立即执行）
+    STOPLOSS_CONFIRMATION_DELAY: int = 15
+
     # ==================== 信号模型参数 ====================
     # 模型使用市场价格作为基准，然后根据指标综合得分调整
     # 公式: model_prob = market_prob + composite * COMPOSITE_MULTIPLIER
