@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     # 用于过滤瞬时插针造成的误杀（0=关闭确认，立即执行）
     STOPLOSS_CONFIRMATION_DELAY: int = 15
 
+    # 尾盘跳过确认（秒）：距市场收盘≤此秒数时跳过确认直接止损
+    # 结算前价格回弹是假象（做市商拉价/结算撮合），确认只会错过最后卖出时机
+    STOPLOSS_CONFIRMATION_TAIL_SECONDS: int = 40
+
     # ==================== 信号模型参数 ====================
     # 模型使用市场价格作为基准，然后根据指标综合得分调整
     # 公式: model_prob = market_prob + composite * COMPOSITE_MULTIPLIER
