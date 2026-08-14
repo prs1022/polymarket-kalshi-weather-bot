@@ -93,7 +93,9 @@ class Settings(BaseSettings):
     MAX_MODEL_DEVIATION: float = 0.20  # 最大偏离范围（市场价上下20%）
     MIN_CONVERGENCE: int = 3  # 指标一致性要求（需要3/4指标同向，4/4太严，2/4反向）
 
-    INVERT_SIGNAL: bool = True  # 反转信号方向（模型是反向预测，翻转后使用）
+    INVERT_SIGNAL: bool = False  # 反转信号方向（模型是反向预测，翻转后使用）
+    # 当前设置为False: 历史跨库验证(135+189条)确认模型本身有预测能力
+    # inv=True → 旧库51.3% 新库45.1% | inv=False → 旧库48.7% 新库54.9%
 
     # 指标权重配置（总和应接近1.0）
     WEIGHT_RSI: float = 0.20  # RSI指标权重（动量跟随）
